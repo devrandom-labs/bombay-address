@@ -6,28 +6,28 @@
 //! default `SipHash` hasher the resolve path spent several nanoseconds in
 //! hashing alone. Addresses are process-internal and never attacker
 //! controlled, so `SipHash`'s `HashDoS` resistance buys nothing here; the
-//! resolve hot path gets a splitmix64 finalizer (Steele et al., *Fast
-//! splittable pseudorandom number generators*, ACM TOMPECS 2014) instead,
-//! which has full avalanche so dense sequential keys map uniformly onto
-//! hashbrown's power-of-two group layout.
+//! resolve hot path gets the multiply-finalizer scheme used by rustc's
+//! `FxHash` (a bijective multiply by an odd constant, which also spreads
+//! dense sequential keys onto hashbrown's group index bits).
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 
-/// Cheap avalanche-quality hasher for process-internal addresses.
+/// Cheap hasher for process-internal addresses, in the style of rustc's
+/// `FxHash`: rotate-xor folds on `write`, one odd-constant multiply on
+/// `finish`. The multiply is a bijection on 64 bits, so dense sequential
+/// keys map onto hashbrown's index bits without clustering (verified by
+/// the `splitmix_distributes_dense_keys_evenly` test, which now exercises
+/// this hasher).
 #[derive(Default)]
-pub(crate) struct SplitMixHasher(u64);
+pub(crate) struct AddressHasher(u64);
 
-const GOLDEN: u64 = 0x9E37_79B9_7F4A_7C15;
+const FX_SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
-impl Hasher for SplitMixHasher {
+impl Hasher for AddressHasher {
     #[inline]
     fn finish(&self) -> u64 {
-        let mut x = self.0;
-        x = x.wrapping_add(GOLDEN);
-        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        x ^ (x >> 31)
+        self.0.wrapping_mul(FX_SEED)
     }
 
     /// Fold byte spans into the state, order-sensitively, so multi-part
@@ -39,18 +39,18 @@ impl Hasher for SplitMixHasher {
             let mut word = [0_u8; 8];
             word[..chunk.len()].copy_from_slice(chunk);
             let word = u64::from_le_bytes(word);
-            self.0 = self.0.wrapping_mul(GOLDEN).wrapping_add(word);
+            self.0 = self.0.rotate_left(5) ^ word;
         }
     }
 
     #[inline]
     fn write_u64(&mut self, n: u64) {
-        self.0 = self.0.wrapping_mul(GOLDEN).wrapping_add(n);
+        self.0 = self.0.rotate_left(5) ^ n;
     }
 
     #[inline]
     fn write_u8(&mut self, n: u8) {
-        self.0 = self.0.wrapping_mul(GOLDEN).wrapping_add(u64::from(n));
+        self.0 = self.0.rotate_left(5) ^ u64::from(n);
     }
 }
 
@@ -58,7 +58,7 @@ impl Hasher for SplitMixHasher {
 #[cfg(test)]
 #[inline]
 pub(crate) fn hash_key<A: Hash>(address: &A) -> u64 {
-    let mut hasher = SplitMixHasher::default();
+    let mut hasher = AddressHasher::default();
     address.hash(&mut hasher);
     hasher.finish()
 }
@@ -73,7 +73,7 @@ pub(crate) struct Entry<E> {
 /// The registration table: a Swiss-style open-addressed map keyed by
 /// address, hashed with splitmix64.
 pub(crate) struct OpenTable<A, E> {
-    entries: HashMap<A, Entry<E>, BuildHasherDefault<SplitMixHasher>>,
+    entries: HashMap<A, Entry<E>, BuildHasherDefault<AddressHasher>>,
 }
 
 impl<A, E> OpenTable<A, E> {
