@@ -3,9 +3,9 @@
 //! [`std::collections::HashMap`] is hashbrown: a Swiss-style open-addressed
 //! table with group matching (abseil design notes), which keeps probe costs
 //! low even at high load. The baseline measurement showed that with the
-//! default SipHash hasher the resolve path spent several nanoseconds in
+//! default `SipHash` hasher the resolve path spent several nanoseconds in
 //! hashing alone. Addresses are process-internal and never attacker
-//! controlled, so SipHash's HashDoS resistance buys nothing here; the
+//! controlled, so `SipHash`'s `HashDoS` resistance buys nothing here; the
 //! resolve hot path gets a splitmix64 finalizer (Steele et al., *Fast
 //! splittable pseudorandom number generators*, ACM TOMPECS 2014) instead,
 //! which has full avalanche so dense sequential keys map uniformly onto
@@ -51,32 +51,6 @@ impl Hasher for SplitMixHasher {
     #[inline]
     fn write_u8(&mut self, n: u8) {
         self.0 = self.0.wrapping_mul(GOLDEN).wrapping_add(u64::from(n));
-    }
-
-    #[inline]
-    fn write_usize(&mut self, n: usize) {
-        self.write_u64(n as u64);
-    }
-
-    #[inline]
-    fn write_i64(&mut self, n: i64) {
-        self.write_u64(n as u64);
-    }
-
-    #[inline]
-    fn write_i8(&mut self, n: i8) {
-        self.write_u8(n as u8);
-    }
-
-    #[inline]
-    fn write_u128(&mut self, n: u128) {
-        self.write_u64(n as u64);
-        self.write_u64((n >> 64) as u64);
-    }
-
-    #[inline]
-    fn write_i128(&mut self, n: i128) {
-        self.write_u128(n as u128);
     }
 }
 
@@ -126,8 +100,13 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
     /// Insert a registration. The caller must have verified `address` is
     /// not already present.
     pub(crate) fn insert(&mut self, address: A, generation: u64, endpoint: E) {
-        self.entries
-            .insert(address, Entry { generation, endpoint });
+        self.entries.insert(
+            address,
+            Entry {
+                generation,
+                endpoint,
+            },
+        );
     }
 
     /// Remove the registration for `address` only when its generation
@@ -228,19 +207,23 @@ mod tests {
         // population. Expected longest run for 65_536 balls in 131_072 bins
         // is ~log2(131_072) ≈ 17; 24 is a generous ceiling.
         let mut buckets = vec![0_u64; 131_072];
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "distribution test tolerates 32-bit pointer truncation"
+        )]
         for key in 0..65_536_u64 {
             buckets[hash_key(&key) as usize & 131_071] += 1;
         }
-        let longest = buckets
-            .iter()
-            .map(|&b| u64::from(b > 0))
-            .fold((0_u64, 0_u64), |(best, current), run| {
+        let longest = buckets.iter().map(|&b| u64::from(b > 0)).fold(
+            (0_u64, 0_u64),
+            |(best, current), run| {
                 if run == 1 {
                     (best.max(current + 1), current + 1)
                 } else {
                     (best, 0)
                 }
-            });
+            },
+        );
         assert!(longest.0 <= 24, "worst primary-slot run {}", longest.0);
     }
 }

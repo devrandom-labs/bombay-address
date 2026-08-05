@@ -7,15 +7,17 @@ use core::hash::Hash;
 use loom::sync::atomic::{AtomicU64, Ordering};
 #[cfg(loom)]
 use loom::sync::{Arc, RwLock};
-use std::sync::PoisonError;
+#[cfg(not(loom))]
+use parking_lot::RwLock;
+#[cfg(not(loom))]
+use std::sync::Arc;
 #[cfg(not(loom))]
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(not(loom))]
-use std::sync::{Arc, RwLock};
 
 use table::OpenTable;
 
-fn recover<T>(poisoned: PoisonError<T>) -> T {
+#[cfg(loom)]
+fn recover<T>(poisoned: std::sync::PoisonError<T>) -> T {
     poisoned.into_inner()
 }
 
@@ -26,6 +28,28 @@ pub struct AddressInUse<A>(pub A);
 struct Inner<A, E> {
     next_generation: AtomicU64,
     entries: RwLock<OpenTable<A, E>>,
+}
+
+impl<A, E> Inner<A, E> {
+    #[cfg(loom)]
+    fn read_entries(&self) -> loom::sync::RwLockReadGuard<'_, OpenTable<A, E>> {
+        self.entries.read().unwrap_or_else(recover)
+    }
+
+    #[cfg(loom)]
+    fn write_entries(&self) -> loom::sync::RwLockWriteGuard<'_, OpenTable<A, E>> {
+        self.entries.write().unwrap_or_else(recover)
+    }
+
+    #[cfg(not(loom))]
+    fn read_entries(&self) -> parking_lot::RwLockReadGuard<'_, OpenTable<A, E>> {
+        self.entries.read()
+    }
+
+    #[cfg(not(loom))]
+    fn write_entries(&self) -> parking_lot::RwLockWriteGuard<'_, OpenTable<A, E>> {
+        self.entries.write()
+    }
 }
 
 /// A shared mapping from addresses to typed endpoints.
@@ -62,7 +86,7 @@ impl<A, E> AddressSpace<A, E> {
     /// Return the number of live registrations.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.entries.read().unwrap_or_else(recover).len()
+        self.inner.read_entries().len()
     }
 
     /// Return whether the address space is empty.
@@ -81,7 +105,7 @@ where
     /// # Errors
     /// Returns [`AddressInUse`] when an owner is already registered.
     pub fn claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, AddressInUse<A>> {
-        let mut entries = self.inner.entries.write().unwrap_or_else(recover);
+        let mut entries = self.inner.write_entries();
         if entries.get(&address).is_some() {
             return Err(AddressInUse(address));
         }
@@ -105,9 +129,7 @@ where
     #[must_use]
     pub fn resolve(&self, address: &A) -> Option<E> {
         self.inner
-            .entries
-            .read()
-            .unwrap_or_else(recover)
+            .read_entries()
             .get(address)
             .map(|entry| entry.endpoint.clone())
     }
@@ -144,7 +166,7 @@ where
             return;
         }
         self.released = true;
-        let mut entries = self.inner.entries.write().unwrap_or_else(recover);
+        let mut entries = self.inner.write_entries();
         entries.remove_if(&self.address, self.generation);
     }
 }

@@ -7,6 +7,9 @@ license.workspace = true
 description = "A generic concurrent address space with generation-safe ownership."
 build = "build.rs"
 
+[dependencies]
+parking_lot.workspace = true
+
 [target.'cfg(loom)'.dependencies]
 loom.workspace = true
 
