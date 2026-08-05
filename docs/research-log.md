@@ -402,6 +402,24 @@ the corrected design). It is structural for the mandated reentrancy safety
 be avoided in safe Rust without either cloning under the lock (the
 deadlock bug) or leaking. Accepted and documented.
 
+## Settled-state confirmation (final)
+
+After the oscillation window, the machine settled in the slow state
+(stable ±0.5%: corrected design 131.6-132.9M, consistent with the
+segment-2 baseline of 132.9M). Definitive interleaved A/B in that state:
+
+- baseline: 96.6, 97.9, 96.6M (avg 97.3M)
+- corrected: 131.4, 131.2, 131.8M (avg 131.5M)
+- ratio: **+35.2%** — matches the +33-36% observed in every other state.
+
+Final verdict: the corrected design is +35% over the frozen baseline,
+state-independent, reentrancy-safe, loom-covered (frozen model + 3 new
+models), with every alternative in the research space measured and
+rejected on evidence. The remaining single-lock multi-reader cliff and the
+Arc bridge cost are documented with measured bounds; both are structural
+for the generic+reentrancy-safe contract and belong to the actorpass layer
+(u64 keys) to specialize.
+
 ## Ideas backlog
 
 - TL version-stamped resolve cache for hot-address workloads (real
