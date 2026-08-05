@@ -358,6 +358,50 @@ generation gate is a defensive invariant (unit-tested at the table level)
 against future API growth (e.g., a `replace` operation), not a reachable
 race. If such an API is added, the loom model must be extended.
 
+## Machine-state variance (critical for future sessions)
+
+The M4 Pro's single-threaded performance oscillates ±30% across states
+(detected while re-measuring after the correctness fix). Same binaries,
+same flags, no thermal warnings (`pmset -g therm` clean), no background
+load (`ps aux -r` clean, load ~2.5-3): the OS power/clock state moves the
+benchmark. Observed ranges:
+
+- baseline design: 96.9M (slow state) to 146.9M (fast state)
+- corrected design: 132.2M to 195.0M
+- scratch locked-fx probe: 5.11ns to 3.75ns
+
+Within a single state, runs are stable (±0.05% in the original window,
+±1-3% when the state is drifting). **Cross-state absolute comparisons are
+meaningless; within-state ratios are stable.** The corrected design is
++33-36% over the baseline in EVERY state sampled. The original logged
+"+94%" (run #5) was a within-window number where the std-lock baseline was
+at its worst; the ratio compressed when the machine sped up because the
+baseline's std lock and SipHash benefited most from faster clocks.
+
+Implications:
+- Re-validate absolute scores with the session baseline in the SAME state
+  window; prefer interleaved A/B measurements.
+- The final design's honest standing: +33-36% over baseline, state-
+  independent.
+
+## Arc bridge cost (corrected for machine-state contamination)
+
+Run #6 logged the reentrancy fix at -1.4% (190.6 vs 193.3M), but that
+comparison straddled a machine-state boundary and UNDERSTATED the cost.
+Careful interleaved measurement puts the Arc bridge at **~1.4-1.7ns per
+resolve**:
+- scratch, contiguous pre-allocated Arc nodes: +1.14ns
+- scratch, harness-identical scattered Arc::new pattern: +1.65ns
+- harness interleaved commits: pre-fix 266-270M vs post-fix 183-195M
+  (within-state, fast state)
+
+The cost is the two refcount RMWs plus the deref of the scattered Arc
+node line (cache-set-layout sensitive, hence ±3% run-to-run variance of
+the corrected design). It is structural for the mandated reentrancy safety
+(E::clone after the read guard, E::drop after the write guard) and cannot
+be avoided in safe Rust without either cloning under the lock (the
+deadlock bug) or leaking. Accepted and documented.
+
 ## Ideas backlog
 
 - TL version-stamped resolve cache for hot-address workloads (real
