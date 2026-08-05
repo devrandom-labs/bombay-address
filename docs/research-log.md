@@ -221,6 +221,87 @@ Winning design at 1,000,000 live addresses (scratch, counting allocator):
 - Multi-reader cliff reproduced with the real crate (scaling bench):
   159.9M single-threaded → 13.9M at 8 threads.
 
+## Full research-solution audit (prompt's candidate list, every item)
+
+A reviewer asked whether every research direction from `.auto/prompt.md` had
+been checked. The audit below closes the gaps that were previously cited as
+sources but never measured. All measurements: Apple M4 Pro, release,
+scratch benches in /tmp/addrbench.
+
+### papaya (wait-free-read lock-free map) — REJECTED
+
+`papaya::HashMap` with pin-based reads: **28.6ns/op single-threaded
+(34.9M)** — 5.5x worse than the RwLock design; 315M at 8 threads (scales,
+but the per-read pin cost is prohibitive single-threaded). Its `remove_if`
+closure fits the generation gate, but the design loses the metric.
+
+### Sharded 16/32/64/128 — REJECTED (full range now measured)
+
+Single-threaded cost grows monotonically with shard count:
+16 shards 5.96ns, 32 → 6.42-6.49, 64 → 7.71-7.77, 128 → 9.18-9.29ns.
+8-thread throughput improves only modestly (17.4 → 26 → 39 → 58M) — the
+per-read lock RMW persists, diluted not eliminated. Confirmed: sharding is
+not a fix; random hash routing gives no locality.
+
+### Two-level radix over the hash (prompt's first question) — REJECTED
+
+Unprotected (read-only) 2^16-node × 16-slot radix with splitmix indexing:
+**3.93ns/op (254M) single-threaded, 2,084M at 8 threads** — the fastest
+structure measured, but it has no synchronization and cannot be made
+generic-safe without paying for it. With per-node `parking_lot` locks:
+**7.59ns/op (131.7M)** single-threaded, 195M at 8T — the node-lock
+granularity does fix the scaling cliff (16x over the single lock) but at
+47% single-threaded cost. Also requires node-overflow handling
+(8,192-node × 16-slot config with λ=8 overflows; the build hangs).
+Rejected for the metric; the node-lock granularity finding is recorded for
+the actorpass layer.
+
+### Concurrent Robin Hood hashing — REJECTED (no win)
+
+24B (key, value, distance) tuple array, Robin Hood displacement, single
+parking_lot lock: 5.11ns/op single-threaded (~= current 5.17), 118.6M at
+8 threads. Notably the short critical section improved 8-thread throughput
+10x over the hashbrown-in-lock case (11.7M), but it neither beats the
+metric nor fixes the cliff. Note: fx's low bits are a bijection for dense
+keys, so the probe is always 1 step — this is also why hashbrown+fx
+measures 1.55ns bare.
+
+### Hazard pointers — REJECTED by reasoning from the epoch measurement
+
+Hazard-pointer reads must publish the dereferenced pointer to a global
+hazard slot (a shared RMW per read) plus validate — strictly more per-read
+work than crossbeam's thread-local epoch pin. The epoch-slot table
+(crossbeam pin) measured 11.7ns/op single-threaded; hazard pointers cannot
+beat that bound on either the single-threaded or the scaling axis.
+
+### Split-ordered lists / Click's nonblocking table — REJECTED by
+### measurement bounds
+
+Both are chained/pointer-chasing probe structures. The HAMT (10.5ns for 4
+fixed levels, ~2.6ns/level) and papaya (28.6ns) bound their cost: a chain
+walk of 1-2 steps plus lock-free reclamation cannot beat 5.17ns
+single-threaded.
+
+### Swiss control bytes + sharded writers — COVERED
+
+Sharded hashbrown IS Swiss control bytes with shard-guarded writers;
+measured under "Sharded" above.
+
+### Segmented growth / capacity planning — analyzed, no harness benefit
+
+The metric measures resolve only; growth lives in the claim path.
+At 1M claims the design allocates 27 times total (hashbrown doubling). A
+capacity-hint API could cut that to ~3 allocations but requires an API
+addition the frozen harness never calls. Recorded as a non-goal for this
+session.
+
+### Caveat on cross-bench comparisons
+
+The same sharded-16 design measured 191.8M in one binary and 167.8M in
+another (+/-14% binary-to-binary codegen variance). In-binary comparisons
+are reliable; cross-binary deltas under ~15% should not be over-read. The
+in-crate harness (193.3M) remains the ground truth.
+
 ## Ideas backlog
 
 - TL version-stamped resolve cache for hot-address workloads (real
