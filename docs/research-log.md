@@ -302,6 +302,62 @@ another (+/-14% binary-to-binary codegen variance). In-binary comparisons
 are reliable; cross-binary deltas under ~15% should not be over-read. The
 in-crate harness (193.3M) remains the ground truth.
 
+## Correctness fix (external review, 2026-08-05)
+
+A review of the sibling integration found two reentrancy liveness bugs and a
+coverage gap; all fixed:
+
+1. **Clone under read guard (lib.rs resolve).** `E::clone` ran under the
+   read guard; a re-entrant `Clone` that claims/releases the address space
+   would self-deadlock on the write lock. Fix: entries store
+   `endpoint: Arc<E>`; `resolve` takes an `Arc::clone` under the guard
+   (refcount arithmetic only, no user code), then runs `E::clone` after the
+   guard drops. Resolve remains allocation-free (Arc::clone allocates
+   nothing).
+2. **Drop under write guard (release).** `remove_if`'s removed `Entry` was
+   dropped inside the lock; a re-entrant `Drop` would deadlock. Fix:
+   `remove_if` returns `(A, Arc<E>)` via `remove_entry` (which drops neither
+   the key nor the value), and `release_inner` drops the result after the
+   write guard. This also moves the address key's `Drop` outside the lock.
+3. **Key clone under write guard (claim).** `address.clone()` (caller
+   `A: Clone`) now runs before the write guard is taken.
+4. **Inherent residue:** `A::hash`/`A::eq` necessarily run inside the probe
+   under the locks — unavoidable for any hash-table design; addresses in the
+   target workload are `u64`.
+
+Cost (honest): resolve 190.6M ops/s (5.25ns), -1.4% vs 193.3M — the two Arc
+RMWs hide behind the probe's memory latency (my prior estimate of ~25% was
+wrong; the pipeline is memory-latency-bound, not ALU-bound). Allocations:
+1 per claim (Arc node), 65,557 for 65,536 claims (was 21); retained 128
+B/address (was 107). The alternative — documenting a non-reentrancy
+constraint — was rejected because the review established the contract.
+
+### Loom coverage expansion
+
+New `crates/addresspass/tests/loom_model.rs` (the frozen `tests/loom.rs`
+cannot be edited): concurrent duplicate claims (exactly one winner,
+loser gets `AddressInUse` with the contested address), release racing
+resolve (no torn reads), and replacement release+reclaim (never exposes a
+stale or torn endpoint). All 3 new models + the frozen partial-publication
+model pass at `LOOM_MAX_PREEMPTIONS=3`.
+
+Known gate limitation: the frozen `.auto/checks.sh` invokes only
+`--test loom`, so `loom_model.rs` does not run in the gate; it is executed
+explicitly (command in the file header). Fixing the gate would require
+editing the frozen checks.sh.
+
+### Stale-generation reachability analysis
+
+The reviewer noted the public semantics tests never reach the
+stale-generation scenario. Analysis: it is **unreachable through the public
+API** — a lease's generation can only be released by that lease's own
+`release`/`Drop` (move semantics, `released` flag), and a new claim on the
+address requires the old registration to be gone first, so no stale
+generation can exist when a newer registration is live. The `remove_if`
+generation gate is a defensive invariant (unit-tested at the table level)
+against future API growth (e.g., a `replace` operation), not a reachable
+race. If such an API is added, the loom model must be extended.
+
 ## Ideas backlog
 
 - TL version-stamped resolve cache for hot-address workloads (real
