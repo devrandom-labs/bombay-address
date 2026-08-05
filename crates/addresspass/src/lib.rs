@@ -1,16 +1,19 @@
 //! A typed concurrent address space with generation-safe ownership.
 
+mod table;
+
 use core::hash::Hash;
 #[cfg(loom)]
 use loom::sync::atomic::{AtomicU64, Ordering};
 #[cfg(loom)]
 use loom::sync::{Arc, RwLock};
-use std::collections::HashMap;
 use std::sync::PoisonError;
 #[cfg(not(loom))]
 use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(loom))]
 use std::sync::{Arc, RwLock};
+
+use table::OpenTable;
 
 fn recover<T>(poisoned: PoisonError<T>) -> T {
     poisoned.into_inner()
@@ -20,14 +23,9 @@ fn recover<T>(poisoned: PoisonError<T>) -> T {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressInUse<A>(pub A);
 
-struct Entry<E> {
-    generation: u64,
-    endpoint: E,
-}
-
 struct Inner<A, E> {
     next_generation: AtomicU64,
-    entries: RwLock<HashMap<A, Entry<E>>>,
+    entries: RwLock<OpenTable<A, E>>,
 }
 
 /// A shared mapping from addresses to typed endpoints.
@@ -56,7 +54,7 @@ impl<A, E> AddressSpace<A, E> {
         Self {
             inner: Arc::new(Inner {
                 next_generation: AtomicU64::new(1),
-                entries: RwLock::new(HashMap::new()),
+                entries: RwLock::new(OpenTable::new()),
             }),
         }
     }
@@ -84,17 +82,11 @@ where
     /// Returns [`AddressInUse`] when an owner is already registered.
     pub fn claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, AddressInUse<A>> {
         let mut entries = self.inner.entries.write().unwrap_or_else(recover);
-        if entries.contains_key(&address) {
+        if entries.get(&address).is_some() {
             return Err(AddressInUse(address));
         }
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
-        entries.insert(
-            address.clone(),
-            Entry {
-                generation,
-                endpoint,
-            },
-        );
+        entries.insert(address.clone(), generation, endpoint);
         Ok(Lease {
             inner: self.inner.clone(),
             address,
@@ -153,12 +145,7 @@ where
         }
         self.released = true;
         let mut entries = self.inner.entries.write().unwrap_or_else(recover);
-        if entries
-            .get(&self.address)
-            .is_some_and(|entry| entry.generation == self.generation)
-        {
-            entries.remove(&self.address);
-        }
+        entries.remove_if(&self.address, self.generation);
     }
 }
 
