@@ -4,8 +4,8 @@ set -euo pipefail
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
-LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" \
-  cargo test -p addresspass --test loom --release
+LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom -D warnings" \
+  cargo test -p addresspass --test loom --test loom_model --release
 
 base=$(cat .auto/BASELINE 2>/dev/null || true)
 if [ -n "${base}" ]; then
@@ -13,6 +13,8 @@ if [ -n "${base}" ]; then
     .auto/checks.sh
     .auto/measure.sh
     crates/addresspass/tests/semantics.rs
+    crates/addresspass/tests/loom.rs
+    crates/addresspass/tests/loom_model.rs
     crates/addresspass/benches/address_space.rs
     crates/addresspass-perf
   )
@@ -23,4 +25,3 @@ if [ -n "${base}" ]; then
 fi
 
 echo "CHECK OK"
-

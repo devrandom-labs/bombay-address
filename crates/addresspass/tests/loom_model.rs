@@ -5,8 +5,8 @@
 //! claims, release racing resolve (no torn reads), and replacement
 //! (release + reclaim) never exposing a stale or torn endpoint.
 //!
-//! NOTE: the frozen `.auto/checks.sh` invokes only `--test loom`, so this
-//! file does not run in that gate. Run it explicitly with:
+//! The frozen `.auto/checks.sh` runs this suite together with `tests/loom.rs`.
+//! To run it explicitly:
 //! `LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test -p addresspass
 //! --test loom_model --release`
 #![cfg(loom)]
@@ -49,7 +49,6 @@ fn release_racing_resolve_never_observes_torn_state() {
     loom::model(|| {
         let space = Arc::new(AddressSpace::new());
         let lease = space.claim(1_u64, 99_u64).unwrap();
-        let writer_space = Arc::clone(&space);
         let reader_space = Arc::clone(&space);
 
         let writer = thread::spawn(move || drop(lease));
