@@ -105,12 +105,15 @@ where
     /// # Errors
     /// Returns [`AddressInUse`] when an owner is already registered.
     pub fn claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, AddressInUse<A>> {
+        // The key copy for the table happens before the write guard is
+        // taken: caller `A: Clone` code must not run under the lock.
+        let key = address.clone();
         let mut entries = self.inner.write_entries();
         if entries.get(&address).is_some() {
             return Err(AddressInUse(address));
         }
         let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
-        entries.insert(address.clone(), generation, endpoint);
+        entries.insert(key, generation, endpoint);
         Ok(Lease {
             inner: self.inner.clone(),
             address,
@@ -126,12 +129,18 @@ where
     E: Clone,
 {
     /// Resolve a snapshot of the endpoint currently registered at `address`.
+    ///
+    /// The endpoint's `Clone` runs after the read guard is dropped: taking
+    /// the shared handle under the guard is refcount arithmetic only, so a
+    /// re-entrant `Clone` that claims or releases in the address space
+    /// cannot deadlock against the lock.
     #[must_use]
     pub fn resolve(&self, address: &A) -> Option<E> {
-        self.inner
-            .read_entries()
-            .get(address)
-            .map(|entry| entry.endpoint.clone())
+        let endpoint = {
+            let guard = self.inner.read_entries();
+            guard.get(address).map(|entry| Arc::clone(&entry.endpoint))
+        };
+        endpoint.as_deref().cloned()
     }
 }
 
@@ -166,8 +175,14 @@ where
             return;
         }
         self.released = true;
-        let mut entries = self.inner.write_entries();
-        entries.remove_if(&self.address, self.generation);
+        // The removed address and endpoint handle are dropped after the
+        // write guard is released, so re-entrant `Drop` implementations
+        // cannot deadlock against the lock.
+        let removed = {
+            let mut entries = self.inner.write_entries();
+            entries.remove_if(&self.address, self.generation)
+        };
+        drop(removed);
     }
 }
 

@@ -10,8 +10,12 @@
 //! `FxHash` (a bijective multiply by an odd constant, which also spreads
 //! dense sequential keys onto hashbrown's group index bits).
 
+#[cfg(loom)]
+use loom::sync::Arc;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
+#[cfg(not(loom))]
+use std::sync::Arc;
 
 /// Cheap hasher for process-internal addresses, in the style of rustc's
 /// `FxHash`: rotate-xor folds on `write`, one odd-constant multiply on
@@ -65,9 +69,15 @@ pub(crate) fn hash_key<A: Hash>(address: &A) -> u64 {
 
 /// One live registration: the registration generation and the typed
 /// endpoint. The address is the hash map key.
+///
+/// The endpoint is stored behind an [`Arc`] so that [`resolve`](crate::AddressSpace::resolve)
+/// can take a reference-counted handle under the read guard and run the
+/// endpoint's `Clone` implementation *after* the guard is dropped. Running
+/// caller endpoint code (Clone or Drop) under the lock would deadlock if
+/// that code re-entered the address space.
 pub(crate) struct Entry<E> {
     pub(crate) generation: u64,
-    pub(crate) endpoint: E,
+    pub(crate) endpoint: Arc<E>,
 }
 
 /// The registration table: a Swiss-style open-addressed map keyed by
@@ -104,24 +114,32 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
             address,
             Entry {
                 generation,
-                endpoint,
+                endpoint: Arc::new(endpoint),
             },
         );
     }
 
     /// Remove the registration for `address` only when its generation
-    /// matches `generation`. Returns whether anything was removed. This is
-    /// the generation safety gate: a stale lease can never remove a newer
-    /// registration for the same address.
-    pub(crate) fn remove_if(&mut self, address: &A, generation: u64) -> bool {
+    /// matches `generation`. This is the generation safety gate: a stale
+    /// lease can never remove a newer registration for the same address.
+    ///
+    /// Returns the removed address and endpoint handle so the caller can
+    /// drop them outside the write guard: the endpoint's `Drop` (through
+    /// the [`Arc`]) and the address's `Drop` must not run while the lock
+    /// is held, or re-entrant destructors would deadlock.
+    #[must_use]
+    pub(crate) fn remove_if(&mut self, address: &A, generation: u64) -> Option<(A, Arc<E>)> {
         if self
             .entries
             .get(address)
             .is_some_and(|entry| entry.generation != generation)
         {
-            return false;
+            return None;
         }
-        self.entries.remove(address).is_some()
+        // `remove_entry` returns the key and value instead of dropping them.
+        self.entries
+            .remove_entry(address)
+            .map(|(key, entry)| (key, entry.endpoint))
     }
 }
 
@@ -136,7 +154,7 @@ mod tests {
         assert_eq!(table.len(), 1);
         let entry = table.get(&7).expect("present");
         assert_eq!(entry.generation, 1);
-        assert_eq!(entry.endpoint, 10);
+        assert_eq!(entry.endpoint.as_ref(), &10);
         assert!(table.get(&8).is_none());
     }
 
@@ -148,14 +166,14 @@ mod tests {
         }
         for key in 0..4_000_u64 {
             if key % 10 != 0 {
-                assert!(table.remove_if(&key, key + 1));
+                assert!(table.remove_if(&key, key + 1).is_some());
             }
         }
         for key in 0..4_000_u64 {
             if key % 10 == 0 {
                 let entry = table.get(&key).expect("survivor must be found");
                 assert_eq!(entry.generation, key + 1);
-                assert_eq!(entry.endpoint, key.wrapping_mul(3));
+                assert_eq!(entry.endpoint.as_ref(), &key.wrapping_mul(3));
             } else {
                 assert!(table.get(&key).is_none(), "deleted key {key} still present");
             }
@@ -167,9 +185,9 @@ mod tests {
     fn stale_generation_never_removes_newer_registration() {
         let mut table = OpenTable::new();
         table.insert(1_u64, 1, "first");
-        assert!(!table.remove_if(&1, 1_000));
-        assert_eq!(table.get(&1).expect("kept").endpoint, "first");
-        assert!(table.remove_if(&1, 1));
+        assert!(table.remove_if(&1, 1_000).is_none());
+        assert_eq!(table.get(&1).expect("kept").endpoint.as_ref(), &"first");
+        assert!(table.remove_if(&1, 1).is_some());
         assert!(table.get(&1).is_none());
     }
 
@@ -183,18 +201,21 @@ mod tests {
         for key in 0..10_000_u64 {
             let entry = table.get(&key).expect("present after growth");
             assert_eq!(entry.generation, key + 1);
-            assert_eq!(entry.endpoint, key * 7);
+            assert_eq!(entry.endpoint.as_ref(), &(key * 7));
         }
         for key in 0..10_000_u64 {
             if key % 3 == 0 {
-                assert!(table.remove_if(&key, key + 1));
+                assert!(table.remove_if(&key, key + 1).is_some());
             }
         }
         for key in 0..10_000_u64 {
             if key % 3 == 0 {
                 assert!(table.get(&key).is_none());
             } else {
-                assert_eq!(table.get(&key).expect("survivor").endpoint, key * 7);
+                assert_eq!(
+                    table.get(&key).expect("survivor").endpoint.as_ref(),
+                    &(key * 7)
+                );
             }
         }
     }
