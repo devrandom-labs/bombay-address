@@ -186,9 +186,47 @@ the generic penalty.
 - The generation check (`remove_if`) and read-under-write-lock semantics
   are unchanged; loom 3-preemption test passes; all frozen tests untouched.
 
+## Follow-up session (2026-08-05, second segment)
+
+### raw_entry / single-hash path (REJECTED, no win)
+
+Hypothesis: `HashMap::get` re-hashes internally; `raw_entry().from_hash`
+with a precomputed fx hash should save ~0.4ns. Findings: this toolchain's
+(Rust 1.96) `std::collections::HashMap` is a direct hashbrown re-export
+and `raw_entry` is GONE from the public API. Prototyped with the
+`hashbrown` 0.15 `HashTable` (single-hash `find`): bare probe 1.55ns —
+IDENTICAL to `HashMap::get` with fx (the internal re-hash overlaps the
+probe's memory latency); locked 5.22ns — identical to the current 5.17.
+No dependency added; hypothesis falsified by measurement.
+
+### 1M-population validation (prompt's "millions" question)
+
+Winning design at 1,000,000 live addresses (scratch, counting allocator):
+- resolve: 19.1ns/op (52.4M ops/s) — DRAM-latency-bound: the map is
+  ~110MB, each probe touches 2 lines from DRAM. This is the physical
+  floor for any random-access table of that size; no safe generic design
+  avoids it (the 65,536-entry harness is L2-resident, which is why the
+  lock dominates there instead).
+- claim: 44.1ns/addr; release+reclaim pair: 73.7ns.
+- allocations: 27 total for 1M claims (hashbrown growth reallocs).
+- retained: 110.6 B/live address (linear in population).
+- Baseline configuration (std RwLock + SipHash HashMap) at 1M: 31.0ns/op
+  (32M ops/s). The design's win shrinks from +97% (65K, cache-resident)
+  to +62% (1M, DRAM-bound) but does not vanish.
+
+### Confirmations
+
+- Current commit re-measured: 193.0–193.7M ops/s (5.16–5.18ns), stable
+  across runs.
+- Multi-reader cliff reproduced with the real crate (scaling bench):
+  159.9M single-threaded → 13.9M at 8 threads.
+
 ## Ideas backlog
 
 - TL version-stamped resolve cache for hot-address workloads (real
   workload only; costs ~0.7ns/op on the harness's anti-locality walk).
 - Specialized `u64`-key path (seqlock/atomic slots) if addresspass ever
   gains a key-shape specialization; measured ceiling 1.9ns/op.
+- At 1M population the design is DRAM-bound (19ns); a population-aware
+  capacity hint (`with_capacity`) or a compact two-level layout are the
+  only levers, both additive API work with no harness benefit.
