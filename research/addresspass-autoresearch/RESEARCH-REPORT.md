@@ -158,6 +158,17 @@ Negative results worth recording:
 - Loom model added: two-address/three-thread interleaving has no
   cross-address bleed (6 active models + 1 ignored reproducer).
 
+### Segment 7 — composite keys, lease migration
+
+- Composite keys (`tests/wide_key_proptest.rs`): 256-case proptest over
+  `(u64, u64)` tuple addresses against an oracle; order sensitivity of
+  tuple parts pinned deterministically; `u128` addresses spanning both
+  64-bit halves. **No divergence.**
+- Lease migration: a lease claimed on one thread releases exactly on
+  another (Miri-friendly test in `space_lifetime.rs`), and a 3-thread
+  producer/consumer/resolver handoff over a channel (3,000 rounds over
+  32 addresses) never double-owns and drains exactly. **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

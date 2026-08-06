@@ -218,3 +218,67 @@ fn cloned_spaces_across_threads_share_registrations() {
     claimant.join().unwrap();
     assert!(space.is_empty());
 }
+
+/// Concurrent lease handoff: claims on the producer thread are released
+/// on a consumer thread over a channel while a third thread resolves.
+/// Ownership counters must never exceed one per address, and the final
+/// drain must be exact.
+#[test]
+fn cross_thread_lease_handoff_stays_exact() {
+    const ROUNDS: u64 = 3_000;
+    const ADDRESSES: u64 = 32;
+
+    let space = Arc::new(AddressSpace::<u64, u64>::new());
+    let owners: Arc<Vec<AtomicUsize>> =
+        Arc::new((0..ADDRESSES).map(|_| AtomicUsize::new(0)).collect());
+    let (tx, rx) = std::sync::mpsc::channel::<addresspass::Lease<u64, u64>>();
+    let barrier = Arc::new(Barrier::new(3));
+
+    let producer = {
+        let space = Arc::clone(&space);
+        let owners = Arc::clone(&owners);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            for round in 0..ROUNDS {
+                let address = round % ADDRESSES;
+                if let Ok(lease) = space.claim(address, round + 1) {
+                    let previous = owners[address as usize].fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(previous, 0, "address {address} double-owned");
+                    tx.send(lease).unwrap();
+                }
+            }
+        })
+    };
+    let consumer = {
+        let owners = Arc::clone(&owners);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            while let Ok(lease) = rx.recv() {
+                let address = *lease.address();
+                owners[address as usize].fetch_sub(1, Ordering::SeqCst);
+                lease.release();
+            }
+        })
+    };
+    let resolver = {
+        let space = Arc::clone(&space);
+        std::thread::spawn(move || {
+            barrier.wait();
+            for round in 0..ROUNDS {
+                let address = round % ADDRESSES;
+                if let Some(endpoint) = space.resolve(&address) {
+                    assert!((1..=ROUNDS).contains(&endpoint), "foreign endpoint {endpoint}");
+                }
+            }
+        })
+    };
+    producer.join().unwrap();
+    consumer.join().unwrap();
+    resolver.join().unwrap();
+    for (address, owner) in owners.iter().enumerate() {
+        assert_eq!(owner.load(Ordering::SeqCst), 0, "address {address} leaked");
+    }
+    assert!(space.is_empty());
+}

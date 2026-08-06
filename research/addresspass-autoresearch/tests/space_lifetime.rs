@@ -92,3 +92,20 @@ fn independent_spaces_share_no_state() {
     lease_b.release();
     assert!(first.is_empty() && second.is_empty());
 }
+
+/// Lease migration: a lease claimed on one thread can be moved to and
+/// released on another (the actor-pattern handoff). Small enough for the
+/// Miri lane.
+#[test]
+fn lease_migrates_across_threads_and_releases_exactly() {
+    let space = AddressSpace::new();
+    let lease = space.claim(9_u64, 90_u64).unwrap();
+    let peer = space.clone();
+    let handle = std::thread::spawn(move || {
+        assert_eq!(*lease.address(), 9);
+        lease.release();
+    });
+    handle.join().unwrap();
+    assert_eq!(space.resolve(&9), None);
+    assert!(peer.is_empty());
+}
