@@ -115,3 +115,81 @@ fn zero_padding_collision_pairs_coexist() {
     second.release();
     assert!(space.is_empty());
 }
+
+/// Rebuilding a string-keyed chain at the same slot cascades the OLD
+/// chain exactly: non-contiguous letter-derived addresses let a rebuild
+/// succeed without colliding, and the replaced chain's registrations
+/// must all be released (pins the Segment 23 model bug: the slot
+/// overwrite drops the old top, cascading its whole chain).
+#[test]
+fn string_chain_rebuild_releases_old_chain() {
+    /// One chain link: value for identity, plus the next lease down.
+    struct Link {
+        value: u64,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<Lease<String, Link>>>,
+    }
+    impl Clone for Link {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value,
+                next: None, // snapshots never own the chain below
+            }
+        }
+    }
+    impl std::fmt::Debug for Link {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Link({})", self.value)
+        }
+    }
+
+    let space = AddressSpace::<String, Link>::new();
+    // Old chain: top "x" owns the inner lease at "y".
+    let inner = space
+        .claim(
+            String::from("y"),
+            Link {
+                value: 20,
+                next: None,
+            },
+        )
+        .unwrap();
+    let top = space
+        .claim(
+            String::from("x"),
+            Link {
+                value: 10,
+                next: Some(Box::new(inner)),
+            },
+        )
+        .unwrap();
+    assert_eq!(space.len(), 2);
+
+    // Rebuild at the same conceptual slot with DIFFERENT keys: succeeds
+    // (no collision). Dropping the old top must cascade the OLD chain —
+    // both "x" and "y" released.
+    let second = space
+        .claim(
+            String::from("p"),
+            Link {
+                value: 30,
+                next: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(space.len(), 3);
+    drop(top);
+    assert!(space.resolve(&String::from("x")).is_none(), "old top released");
+    assert!(space.resolve(&String::from("y")).is_none(), "old inner cascaded");
+    assert_eq!(space.len(), 1);
+    assert_eq!(
+        space.resolve(&String::from("p")).map(|l| l.value),
+        Some(30)
+    );
+
+    drop(second);
+    assert!(space.is_empty());
+}

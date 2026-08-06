@@ -414,6 +414,20 @@ validity.
   lockstep. The isolation entry has no chains; the cascade entry has no
   second space. **No divergence.**
 
+### Segment 25 — 7-address exhaustive cell + string-chain rebuild pinpoint
+
+- `tests/sequential_model.rs` gained the 7-address cell of the
+  exhaustive table: 21 symbols per position, depths 1..=2, **462
+  histories** — the widest fan-out cell. **No divergence.** Suite total
+  now ~1,266,120 exhaustive histories.
+- `tests/string_address_proptest.rs` gained
+  `string_chain_rebuild_releases_old_chain`: a string-keyed 2-chain
+  rebuilt at the same conceptual slot with DIFFERENT keys succeeds (no
+  collision), and dropping the old top cascades the old chain exactly —
+  pinning the Segment 23 model bug as a deterministic SUT-level
+  regression (the model's slot overwrite must mirror the old chain's
+  release). **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

@@ -157,6 +157,14 @@ fn exhaustive_six_address_histories_up_to_depth_3_match_model() {
 }
 
 #[test]
+// 7 addresses, 21 symbols per position, depths 1..=2: 462 histories.
+// Widest fan-out cell of the exhaustive table. Native-only.
+#[cfg_attr(miri, ignore = "exhaustive exploration is a native-speed workload")]
+fn exhaustive_seven_address_histories_up_to_depth_2_match_model() {
+    assert_eq!(explore_all::<7>(2), 462);
+}
+
+#[test]
 fn stale_generation_is_unreachable_through_the_public_api() {
     // Documented invariant: releasing an old generation cannot remove a
     // newer one. Through the public API a stale lease cannot exist — a
