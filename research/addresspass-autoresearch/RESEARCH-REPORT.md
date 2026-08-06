@@ -304,6 +304,22 @@ validity.
   endpoint's drop releases 2, the blocker at 1 survives, and the space
   drains exactly. **Pass.**
 
+### Segment 17 — snapshot-under-cascade proptest
+
+- `tests/snapshot_cascade_proptest.rs`, two properties (256 cases each):
+  - `chain_internal_snapshots_survive_whole_chain_cascade`: resolve
+    snapshots taken from every `snapshot_every`-th address of 1–4 chains
+    (depth 1–63) — including chain-INTERNAL links — stay intact with
+    pinned values after every chain is cascaded to empty.
+  - `snapshot_pins_value_across_release_and_reclaim`: per-round snapshots
+    of the top and an internal link survive release + full reclaim at the
+    same base across 1–8 rounds; every generation's snapshot keeps its
+    own value while the chain is rebuilt.
+  Both close the gap between the snapshot-validity lane and the cascade
+  lane: neither alone covered snapshots of chain-internal registrations
+  surviving whole-chain cascades, nor snapshot pinning across churn.
+  **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
