@@ -462,6 +462,16 @@ validity.
   release-graph shape under interleaving). Run and green under
   `LOOM_MAX_PREEMPTIONS=3` (9 passed, 1 ignored FINDING-004).
 
+### Segment 29 — Eq-panic injections
+
+- `tests/panic_safety.rs` gained `eq_panic_during_claim_leaves_space_consistent`
+  and `eq_panic_during_resolve_leaves_space_consistent`: a constant-hash
+  key whose `Eq` panics while armed (every probe reaches `eq`). Both the
+  claim duplicate-check path and the resolve path must survive a caught
+  `Eq` panic with the space fully functional — FINDING-001/003 document
+  caller `Eq` running under the lock, but only `Hash` panics were
+  previously injected. **Pass** on both paths.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

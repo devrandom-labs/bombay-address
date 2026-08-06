@@ -230,3 +230,122 @@ fn reentrant_address_clone_during_claim_does_not_deadlock() {
     lease.release();
     assert!(space.is_empty());
 }
+
+/// A key whose `Eq` panics while the shared `armed` flag is set (all
+/// keys hash identically so the duplicate check and resolve always reach
+/// `eq`).
+#[derive(Clone)]
+struct EqPanic {
+    id: u64,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PartialEq for EqPanic {
+    fn eq(&self, other: &Self) -> bool {
+        if self.armed.load(Ordering::SeqCst) {
+            panic!("injected eq panic");
+        }
+        self.id == other.id
+    }
+}
+impl Eq for EqPanic {}
+
+impl Hash for EqPanic {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_u64(0); // constant hash: every probe reaches eq
+    }
+}
+
+impl fmt::Debug for EqPanic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "EqPanic({})", self.id)
+    }
+}
+
+/// A panic inside `Eq` during `claim`'s duplicate check unwinds through
+/// the write guard. Afterwards the space must be fully functional — the
+/// Eq path (not just Hash) must be panic-safe on the claim path.
+#[test]
+fn eq_panic_during_claim_leaves_space_consistent() {
+    let space = AddressSpace::new();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seed = space
+        .claim(
+            EqPanic {
+                id: 999,
+                armed: Arc::clone(&armed),
+            },
+            0_u64,
+        )
+        .unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        space.claim(
+            EqPanic {
+                id: 1,
+                armed: Arc::clone(&armed),
+            },
+            10_u64,
+        )
+    }));
+    armed.store(false, Ordering::SeqCst);
+    assert!(result.is_err(), "injected eq panic must propagate");
+    // The space is unharmed: claim, resolve, release all work.
+    let lease = space
+        .claim(
+            EqPanic {
+                id: 1,
+                armed: Arc::clone(&armed),
+            },
+            20_u64,
+        )
+        .unwrap();
+    assert_eq!(
+        space.resolve(&EqPanic {
+            id: 1,
+            armed: Arc::clone(&armed)
+        }),
+        Some(20)
+    );
+    assert_eq!(space.len(), 2);
+    lease.release();
+    seed.release();
+    assert!(space.is_empty());
+}
+
+/// A panic inside `Eq` during `resolve` leaves the space fully usable —
+/// the Eq path (not just Hash and endpoint Clone) is panic-safe on the
+/// resolve path.
+#[test]
+fn eq_panic_during_resolve_leaves_space_consistent() {
+    let space = AddressSpace::new();
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let lease = space
+        .claim(
+            EqPanic {
+                id: 7,
+                armed: Arc::clone(&armed),
+            },
+            70_u64,
+        )
+        .unwrap();
+    armed.store(true, Ordering::SeqCst);
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        space.resolve(&EqPanic {
+            id: 7,
+            armed: Arc::clone(&armed),
+        })
+    }));
+    armed.store(false, Ordering::SeqCst);
+    assert!(result.is_err(), "injected eq panic must propagate");
+    // The space is unharmed and the lease still resolves.
+    assert_eq!(
+        space.resolve(&EqPanic {
+            id: 7,
+            armed: Arc::clone(&armed)
+        }),
+        Some(70)
+    );
+    lease.release();
+    assert!(space.is_empty());
+}
