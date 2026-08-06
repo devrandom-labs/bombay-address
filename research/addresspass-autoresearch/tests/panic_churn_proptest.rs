@@ -21,11 +21,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use addresspass::{AddressSpace, Lease};
 use proptest::prelude::*;
 
-/// A key whose `Hash` panics while the shared `armed` flag is set.
+/// A key whose `Hash` (or `Eq`) panics while the shared `armed` flag is
+/// set. In Eq-panic mode all keys hash identically so every duplicate
+/// check reaches `eq`; in Hash-panic mode hashes differ by id.
 #[derive(Clone)]
 struct PanicKey {
     id: u64,
     armed: Arc<AtomicBool>,
+    panic_in_eq: bool,
 }
 
 impl std::fmt::Debug for PanicKey {
@@ -36,6 +39,9 @@ impl std::fmt::Debug for PanicKey {
 
 impl PartialEq for PanicKey {
     fn eq(&self, other: &Self) -> bool {
+        if self.panic_in_eq && self.armed.load(Ordering::SeqCst) {
+            panic!("injected eq panic");
+        }
         self.id == other.id
     }
 }
@@ -43,30 +49,36 @@ impl Eq for PanicKey {}
 
 impl Hash for PanicKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        if self.armed.load(Ordering::SeqCst) {
+        if !self.panic_in_eq && self.armed.load(Ordering::SeqCst) {
             panic!("injected hash panic");
         }
-        state.write_u64(self.id);
+        if self.panic_in_eq {
+            state.write_u64(0); // constant hash: every probe reaches eq
+        } else {
+            state.write_u64(self.id);
+        }
     }
 }
 
-fn key(id: u64, armed: &Arc<AtomicBool>) -> PanicKey {
+fn key(id: u64, armed: &Arc<AtomicBool>, panic_in_eq: bool) -> PanicKey {
     PanicKey {
         id,
         armed: Arc::clone(armed),
+        panic_in_eq,
     }
 }
 
-/// Replay a history where every `op % 7 == 0` claim is armed: the hash
-/// panics at its duplicate check, the claim unwinds, and the model treats
-/// it as a no-op. All other ops behave exactly as in the reference model.
-fn run(ops: &[(u8, u8)]) {
+/// Replay a history where every `op % 7 == 0` claim is armed: the
+/// injected panic (hash or eq, per `panic_in_eq`) fires at the duplicate
+/// check, the claim unwinds, and the model treats it as a no-op. All
+/// other ops behave exactly as in the reference model.
+fn run(ops: &[(u8, u8)], panic_in_eq: bool) {
     let space = AddressSpace::<PanicKey, u64>::new();
     let armed = Arc::new(AtomicBool::new(false));
 
     // Permanent guard: keeps the table non-empty so the duplicate check
     // always hashes (hashbrown skips hashing an empty table).
-    let guard = space.claim(key(9_999, &armed), 0_u64).unwrap();
+    let guard = space.claim(key(9_999, &armed, panic_in_eq), 0_u64).unwrap();
 
     let mut model: std::collections::BTreeMap<u64, u64> = Default::default();
     model.insert(9_999, 0);
@@ -80,7 +92,7 @@ fn run(ops: &[(u8, u8)]) {
                 let endpoint = u64::from(b1) + 1;
                 armed.store(want_panic, Ordering::SeqCst);
                 let result = catch_unwind(AssertUnwindSafe(|| {
-                    space.claim(key(address, &armed), endpoint)
+                    space.claim(key(address, &armed, panic_in_eq), endpoint)
                 }));
                 armed.store(false, Ordering::SeqCst);
                 match result {
@@ -130,7 +142,7 @@ fn run(ops: &[(u8, u8)]) {
             }
             2 => {
                 assert_eq!(
-                    space.resolve(&key(address, &armed)),
+                    space.resolve(&key(address, &armed, panic_in_eq)),
                     model.get(&address).copied(),
                     "step {step}: resolve({address}) diverged"
                 );
@@ -167,6 +179,24 @@ proptest! {
     fn caught_hash_panics_leave_space_consistent(
         ops in prop::collection::vec((any::<u8>(), any::<u8>()), 0..80)
     ) {
-        run(&ops);
+        run(&ops, false);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        ..ProptestConfig::default()
+    })]
+
+    /// Caught EQ panics (constant-hash keys, every duplicate check
+    /// reaches `eq`) at random history positions leave the space fully
+    /// consistent and the model in lockstep — the randomized counterpart
+    /// of the deterministic Eq-panic injections.
+    #[test]
+    fn caught_eq_panics_leave_space_consistent(
+        ops in prop::collection::vec((any::<u8>(), any::<u8>()), 0..80)
+    ) {
+        run(&ops, true);
     }
 }

@@ -472,6 +472,16 @@ validity.
   caller `Eq` running under the lock, but only `Hash` panics were
   previously injected. **Pass** on both paths.
 
+### Segment 30 — Eq-panic churn proptest
+
+- `tests/panic_churn_proptest.rs` gained
+  `caught_eq_panics_leave_space_consistent` (256 cases, up to 80 ops):
+  the panic-churn model now runs in two modes — Hash-panic (existing)
+  and Eq-panic (constant-hash keys so every duplicate check reaches
+  `eq`) — with the armed-claim-is-a-no-op model shared between them. The
+  randomized counterpart of the Segment 29 deterministic Eq injections.
+  **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
