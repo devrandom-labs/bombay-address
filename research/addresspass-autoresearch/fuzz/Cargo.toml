@@ -62,3 +62,9 @@ name = "addresspass_release_graph"
 path = "fuzz_targets/addresspass_release_graph.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_colliding_cascade"
+path = "fuzz_targets/addresspass_colliding_cascade.rs"
+test = false
+doc = false

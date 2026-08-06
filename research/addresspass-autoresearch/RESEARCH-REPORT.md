@@ -357,6 +357,21 @@ validity.
   divergence.** The insert-path panic stays covered by the deterministic
   `hash_panic_during_claim_insert_leaves_no_ghost_registration`.
 
+### Segment 21 — colliding-key cascade fuzz target
+
+- `fuzz_entry_colliding_cascade` (ninth fuzz target
+  `addresspass_colliding_cascade`, replay campaign 9, seed `0xC011_CA5C`,
+  ~100,000 executions): the chain mechanics of `fuzz_entry_cascade`
+  (nested lease chains, mid-build abort cascades, whole-chain cascades)
+  driven through keys that ALL collide in one hash bucket — combining the
+  collision and cascade surfaces. Chain operations must stay exact under
+  constant-hash contention (the collision entry has no chains; the
+  cascade entry has no collisions). **No divergence.**
+- Deterministic pinpoint (`tests/cascade_proptest.rs`,
+  `colliding_keys_cascade_exactly`): a 4-link chain over constant-hash
+  keys builds, resolves a chain-internal colliding address exactly, and
+  cascades to empty with nothing leaked. **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

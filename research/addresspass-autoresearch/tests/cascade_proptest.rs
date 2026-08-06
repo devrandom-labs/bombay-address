@@ -185,3 +185,61 @@ fn colliding_build_aborts_and_releases_partial_chain() {
     drop(top);
     assert!(space.is_empty());
 }
+
+/// Deterministic pinpoint: the same whole-chain cascade is exact when all
+/// keys collide in one hash bucket (constant-hash `Colliding` key),
+/// combining the cascade and collision surfaces.
+#[test]
+fn colliding_keys_cascade_exactly() {
+    use std::hash::{Hash, Hasher};
+
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    struct Colliding(u64);
+    impl Hash for Colliding {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            state.write_u64(0);
+        }
+    }
+
+    /// Collision-key chain link (the plain `Link` is `u64`-keyed).
+    struct Clink {
+        value: u64,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<Lease<Colliding, Clink>>>,
+    }
+    impl Clone for Clink {
+        fn clone(&self) -> Self {
+            Self {
+                value: self.value,
+                next: None,
+            }
+        }
+    }
+
+    let space = AddressSpace::<Colliding, Clink>::new();
+    let mut next: Option<Box<Lease<Colliding, Clink>>> = None;
+    for offset in (0..4).rev() {
+        let lease = space
+            .claim(
+                Colliding(offset),
+                Clink {
+                    value: offset,
+                    next: next.take(),
+                },
+            )
+            .unwrap();
+        next = Some(Box::new(lease));
+    }
+    assert_eq!(space.len(), 4);
+    // Resolving a chain-internal colliding address works exactly.
+    assert_eq!(space.resolve(&Colliding(2)).map(|l| l.value), Some(2));
+    let top = *next.unwrap();
+    top.release();
+    assert!(space.is_empty());
+    for offset in 0..4 {
+        assert!(space.resolve(&Colliding(offset)).is_none(), "{offset} leaked");
+    }
+}

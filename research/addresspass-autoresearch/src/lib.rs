@@ -789,3 +789,132 @@ pub fn fuzz_entry_release_graph(data: &[u8]) {
     }
     assert!(space.is_empty() && model.is_empty());
 }
+
+/// Colliding-key cascade variant of [`fuzz_entry`]: the chain mechanics
+/// of [`fuzz_entry_cascade`] (nested lease chains, mid-build abort
+/// cascades) driven through keys that ALL collide in one hash bucket —
+/// combining the two attack surfaces. Chain operations must stay exact
+/// under constant-hash contention.
+///
+/// Encoding: two bytes per operation. `op = b0 % 4` selects build (0),
+/// cascade (1), resolve (2), or len-check (3); `slot = (b0 / 4) % 4`
+/// selects one of four chain bases (`slot * 16`); `b1` gives the build
+/// depth (`1 + b1 % 8`) or the resolve offset within the slot's range.
+pub fn fuzz_entry_colliding_cascade(data: &[u8]) {
+    use std::hash::{Hash, Hasher};
+
+    #[derive(Clone, PartialEq, Eq, Debug)]
+    struct Colliding(u64);
+    impl Hash for Colliding {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            state.write_u64(0);
+        }
+    }
+
+    /// One chain link: value for identity, plus the next lease down.
+    struct Link {
+        value: u64,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<addresspass::Lease<Colliding, Link>>>,
+    }
+
+    impl Clone for Link {
+        fn clone(&self) -> Self {
+            // A resolved snapshot must not own the chain below it.
+            Self {
+                value: self.value,
+                next: None,
+            }
+        }
+    }
+
+    const SLOT_BASE: u64 = 16;
+    const MAX_DEPTH: u64 = 8;
+
+    let space = addresspass::AddressSpace::<Colliding, Link>::new();
+    let mut model: std::collections::BTreeMap<u64, u64> = Default::default();
+    type ChainSlot = Option<(addresspass::Lease<Colliding, Link>, Vec<u64>)>;
+    let mut chains: [ChainSlot; 4] = [None, None, None, None];
+    for (step, pair) in data.chunks_exact(2).enumerate() {
+        let slot = usize::from(pair[0] / 4) % 4;
+        let base = (slot as u64) * SLOT_BASE;
+        match pair[0] % 4 {
+            0 => {
+                let depth = 1 + u64::from(pair[1]) % MAX_DEPTH;
+                let mut next: Option<Box<addresspass::Lease<Colliding, Link>>> = None;
+                let mut claimed: Vec<u64> = Vec::new();
+                let mut aborted = false;
+                for offset in (0..depth).rev() {
+                    let address = base + offset;
+                    match space.claim(
+                        Colliding(address),
+                        Link { value: address, next: next.take() },
+                    ) {
+                        Ok(lease) => {
+                            assert!(
+                                model.insert(address, address).is_none(),
+                                "step {step}: SUT claimed an address the model owns"
+                            );
+                            claimed.push(address);
+                            next = Some(Box::new(lease));
+                        }
+                        Err(addresspass::AddressInUse(returned)) => {
+                            assert_eq!(returned.0, address, "step {step}");
+                            assert!(
+                                model.contains_key(&address),
+                                "step {step}: SUT rejected an address the model owns"
+                            );
+                            aborted = true;
+                            break;
+                        }
+                    }
+                }
+                if aborted {
+                    for address in claimed {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: partial cascade released an address the model did not own"
+                        );
+                    }
+                } else {
+                    let top = *next.expect("depth >= 1");
+                    chains[slot] = Some((top, claimed));
+                }
+            }
+            1 => {
+                if let Some((top, addresses)) = chains[slot].take() {
+                    top.release();
+                    for address in addresses {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: cascade released an address the model did not own"
+                        );
+                    }
+                }
+            }
+            2 => {
+                let address = base + u64::from(pair[1]) % MAX_DEPTH;
+                assert_eq!(
+                    space.resolve(&Colliding(address)).map(|l| l.value),
+                    model.get(&address).copied(),
+                    "step {step}: resolve({address}) diverged"
+                );
+            }
+            _ => {
+                assert_eq!(space.len(), model.len(), "step {step}: len diverged");
+            }
+        }
+    }
+    for slot in &mut chains {
+        if let Some((top, addresses)) = slot.take() {
+            top.release();
+            for address in addresses {
+                model.remove(&address);
+            }
+        }
+    }
+    assert!(space.is_empty() && model.is_empty());
+}
