@@ -181,6 +181,17 @@ Negative results worth recording:
   each): every endpoint's `Drop` calls back into the space; a watchdog
   converts any deadlock regression into a failure. **Pass.**
 
+### Segment 9 — key-identity split (FINDING-005)
+
+Re-review of `claim`'s clone-before-lock path produced the campaign's
+strongest finding: the duplicate check and the lease use the caller's
+ORIGINAL key while the table stores the CLONE. Two probe key types with
+legal interior-mutating `Clone`s demonstrate unresolvable claims, silent
+release no-ops with entry leaks, broken exclusive ownership (silent
+replacement), and premature endpoint drop under the write guard. See
+FINDING-005. An active identity-Clone control test pins harness
+validity.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
@@ -347,6 +358,66 @@ kills the space permanently (loom builds).**
   `poisoned_write_lock_recovers_and_stays_consistent` (ignored; assertion
   expresses the correct behavior — post-poison operations succeed and
   the table is consistent). Fails deterministically.
+- No fix attempted (production is immutable for this campaign).
+
+## FINDING-005
+
+**`claim` splits the key identity: it duplicate-checks and leases the
+ORIGINAL address but stores the CLONE — a legal non-identity `Clone`
+breaks resolution, release, exclusive ownership, and endpoint lifetime.**
+
+Root cause: `claim` clones the address before the write guard (by design,
+to keep caller `Clone` code out of the lock), then calls
+`entries.get(&address)` on the ORIGINAL, `entries.insert(key, ..)` with
+the CLONE, and builds the `Lease` from the ORIGINAL. This assumes
+`Clone` is identity-preserving — an assumption the
+`A: Eq + Hash + Clone` bounds do not license. The probe key types use
+interior mutability during `Clone`; they satisfy the
+`std::collections::HashMap` key contract at every call site (no key is
+ever mutated while stored in the map; `Hash`/`Eq` are consistent for
+every value at every instant).
+
+- Expected: (a) a successful claim is immediately resolvable through
+  `lease.address()` and exactly releasable; (b) a claim of an address
+  `Eq`-equal to a live registration is rejected with `AddressInUse`
+  (exclusive ownership); (c) an endpoint is dropped only when its own
+  registration is released.
+- Actual:
+  - **005 (base, desync-down clone):** `claim` returns `Ok` but
+    `resolve(lease.address())` is `None` immediately; `lease.release()`
+    silently no-ops (the generation gate correctly refuses to remove the
+    *other* registration now matching the original's identity); the
+    clone-keyed entry leaks for the life of the space.
+  - **005b (desync-up clone):** a second claim of an `Eq`-equal address
+    is NOT rejected — the duplicate check misses because the table holds
+    the desynced clone — and its insert silently REPLACES the live entry.
+    Exclusive ownership (the crate's first documented invariant) is
+    violated: two live leases span one logical address.
+  - **005c (fallout of 005b):** the replacement drops the first endpoint
+    inline inside `HashMap::insert` — under the write guard, while its
+    lease is still live — contradicting the crate's documented
+    "endpoint Drop never runs under the lock" design (with a re-entrant
+    endpoint `Drop`, this is FINDING-001's deadlock by a new path).
+- Severity: medium–high. Requires an adversarial-but-legal key type;
+  realistic actor addresses (Copy integer ids) are unaffected. But the
+  broken invariants are the crate's core ones, no unsafe or contract
+  violation is involved on the caller side, and the failure is SILENT
+  (leak, no panic). The fix is production's call (e.g. insert the
+  original and clone for the lease, or document the identity-Clone
+  requirement on `claim`).
+- Affected version: addresspass 0.1.0 (baseline `adc64da`, campaign base
+  `d0a4ee2`).
+- Reproduce:
+  `cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test key_clone_split -- --ignored`
+- Regression tests (`tests/key_clone_split.rs`, all ignored, all failing
+  deterministically as designed):
+  `successful_claim_is_immediately_resolvable_and_releasable` (base),
+  `finding_005_leak_shape` (leak shape),
+  `duplicate_claim_of_equal_address_is_rejected` (005b),
+  `live_endpoint_is_not_dropped_before_its_release` (005c). An ACTIVE
+  control (`identity_clone_control_claim_resolve_release_exact`) pins
+  that the mechanism under test is the non-identity `Clone`, not the
+  harness.
 - No fix attempted (production is immutable for this campaign).
 
 ## Miri
