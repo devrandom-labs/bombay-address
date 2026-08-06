@@ -217,6 +217,25 @@ validity.
   address — no torn state, exact drain (8 active models + 1 ignored
   reproducer).
 
+### Segment 12 — drop-cascade depth boundary
+
+- `tests/drop_cascade_depth.rs`: chains of nested leases (each endpoint
+  owns the next lease) recurse through `release` → endpoint `Drop` →
+  `release` on one thread. 1,000-deep drains exactly (active test).
+  Boundary calibration (release profile, default ~2 MiB test-thread
+  stack, `CASCADE_DEPTH=N`): **16,000 deep drains; 17,000 deep overflows
+  the stack and ABORTS the process** (stack overflow is not unwindable —
+  no `catch_unwind` recovery).
+- Classification: observation, NOT a finding. The recursion alternates
+  addresspass's `release_inner` with the USER endpoint's `Drop` (which
+  owns the next lease); the chain shape is constructed through user
+  types, and the same unbounded recursion exists for any user-owned
+  recursive drop chain (a linked list has the same property). Recorded
+  as a hazard boundary: cascade depth is limited only by stack size;
+  applications nesting leases deeply must bound the chain or release
+  level-by-level. Reproduce:
+  `CASCADE_DEPTH=17000 cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test drop_cascade_depth --release -- --ignored`
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
