@@ -282,3 +282,67 @@ fn cross_thread_lease_handoff_stays_exact() {
     }
     assert!(space.is_empty());
 }
+
+/// Contention with re-entrant endpoint drops: every endpoint's `Drop`
+/// calls back into the space (`len`, taking the read guard). If any drop
+/// ever ran under the write guard this would deadlock; the watchdog
+/// converts a deadlock regression into a test failure instead of a hang.
+#[test]
+fn contended_reentrant_endpoint_drops_complete() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    struct Reentrant {
+        space: Arc<AddressSpace<u64, Reentrant>>,
+    }
+    impl Clone for Reentrant {
+        fn clone(&self) -> Self {
+            let _ = self.space.len();
+            Self {
+                space: Arc::clone(&self.space),
+            }
+        }
+    }
+    impl Drop for Reentrant {
+        fn drop(&mut self) {
+            let _ = self.space.len();
+        }
+    }
+
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        const THREADS: usize = 6;
+        const ROUNDS: u64 = 1_000;
+        let space = Arc::new(AddressSpace::<u64, Reentrant>::new());
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS as u64)
+            .map(|thread| {
+                let space = Arc::clone(&space);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    for round in 0..ROUNDS {
+                        let address = (thread + round) % 16;
+                        let endpoint = Reentrant {
+                            space: Arc::clone(&space),
+                        };
+                        if let Ok(lease) = space.claim(address, endpoint) {
+                            let _ = space.resolve(&address);
+                            lease.release();
+                        }
+                        // Rejected endpoints also drop (re-entrantly).
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert!(space.is_empty());
+        let _ = done_tx.send(());
+    });
+    assert!(
+        done_rx.recv_timeout(Duration::from_secs(60)).is_ok(),
+        "contended re-entrant endpoint drops deadlocked"
+    );
+}

@@ -40,7 +40,7 @@ Results (all native runs on Apple M4 Pro, debug profile, Rust 1.96.0):
   16 addresses; hot-address-biased histories), proptest-generated seeds,
   per-step model agreement. **No divergence.** Reproduce:
   `cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test state_machine_proptest`
-- Deterministic fuzz replay: 2 campaigns × 22,400+ executions
+- Deterministic fuzz replay: 2 campaigns × ~20,000 executions
   (ops seed `0xA55E_0001`, colliding seed `0xC011_1D1E`, 7 hand-written
   seeds each mutated in a deterministic chain). **No divergence.**
 - Hash collision correctness: 1,000 constant-hash addresses — claim,
@@ -95,7 +95,7 @@ Negative results worth recording:
   `u64::MAX`, duplicate rejection returning the exact address) pass.
 - Third fuzz target `addresspass_strings` (+ `fuzz_entry_strings`):
   3-byte op encoding, addresses over a 4-letter alphabet with zero-padding
-  variants. Replay campaign 3: seed `0x5E1E_0003`, 22,400+ executions.
+  variants. Replay campaign 3: seed `0x5E1E_0003`, ~20,000 executions.
   **No divergence.**
 - Loom model added: release racing a fresh claim leaves exactly the new
   owner or empty (4 active models + 1 ignored reproducer).
@@ -131,7 +131,7 @@ Negative results worth recording:
   fabricated illegal histories.
 - Fourth fuzz target `addresspass_wide` (+ `fuzz_entry_wide`): 1-byte op
   encoding over 64 addresses (maximizes live-registration fan-out).
-  Replay campaign 4: seed `0x41DE_0004`, 22,400+ executions.
+  Replay campaign 4: seed `0x41DE_0004`, ~20,000 executions.
   **No divergence.**
 - Observation (recorded, not a finding): `OpenTable::remove_if` performs
   two independent lookups (`get` for the generation check, then
@@ -154,7 +154,7 @@ Negative results worth recording:
   spaces; peer release does not interfere) plus a fifth fuzz target
   `addresspass_isolation` routing ops between two spaces, checking BOTH
   spaces against independent models at every resolve step. Replay
-  campaign 5: seed `0x1501_A7E5`, 22,400+ executions. **No divergence.**
+  campaign 5: seed `0x1501_A7E5`, ~20,000 executions. **No divergence.**
 - Loom model added: two-address/three-thread interleaving has no
   cross-address bleed (6 active models + 1 ignored reproducer).
 
@@ -168,6 +168,18 @@ Negative results worth recording:
   another (Miri-friendly test in `space_lifetime.rs`), and a 3-thread
   producer/consumer/resolver handoff over a channel (3,000 rounds over
   32 addresses) never double-owns and drains exactly. **Pass.**
+
+### Segment 8 — deeper bounds, re-entrant contention
+
+- Exhaustive: added 4 addresses depth ≤ 5 (**271,452 histories, no
+  divergence**) alongside 2-address depth 7 and 3-address depth 6
+  (935,244 histories total per suite run).
+- Proptest state machine raised to 1,024 cases per strategy.
+- Fuzz replay raised to ~100,000 executions per campaign × 5 campaigns
+  (~500,000 total model-checked executions per suite run).
+- Re-entrant endpoint drops under 6-thread contention (1,000 rounds
+  each): every endpoint's `Drop` calls back into the space; a watchdog
+  converts any deadlock regression into a failure. **Pass.**
 
 ## FINDING-001
 

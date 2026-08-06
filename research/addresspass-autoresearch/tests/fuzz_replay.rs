@@ -90,34 +90,34 @@ fn campaign(entry: fn(&[u8]), seed: u64, executions: u64) -> u64 {
 #[test]
 fn fuzz_replay_ops_histories_never_diverge() {
     // Seed fixed for reproducibility: 0xA55E_0001 (campaign 1).
-    let runs = campaign(fuzz_entry, 0xA55E_0001, 20_000);
-    assert!(runs >= 20_000, "only {runs} executions");
+    let runs = campaign(fuzz_entry, 0xA55E_0001, 100_000);
+    assert!(runs >= 100_000, "only {runs} executions");
 }
 
 #[test]
 fn fuzz_replay_colliding_histories_never_diverge() {
     // Seed fixed for reproducibility: 0xC011_1D1E (campaign 2).
-    let runs = campaign(fuzz_entry_colliding, 0xC011_1D1E, 20_000);
-    assert!(runs >= 20_000, "only {runs} executions");
+    let runs = campaign(fuzz_entry_colliding, 0xC011_1D1E, 100_000);
+    assert!(runs >= 100_000, "only {runs} executions");
 }
 
 #[test]
 fn fuzz_replay_string_histories_never_diverge() {
     // Seed fixed for reproducibility: 0x5E1E_0003 (campaign 3).
-    let runs = campaign(fuzz_entry_strings, 0x5E1E_0003, 20_000);
-    assert!(runs >= 20_000, "only {runs} executions");
+    let runs = campaign(fuzz_entry_strings, 0x5E1E_0003, 100_000);
+    assert!(runs >= 100_000, "only {runs} executions");
 }
 
 #[test]
 fn fuzz_replay_wide_histories_never_diverge() {
     // Seed fixed for reproducibility: 0x41DE_0004 (campaign 4).
-    let runs = campaign(fuzz_entry_wide, 0x41DE_0004, 20_000);
-    assert!(runs >= 20_000, "only {runs} executions");
+    let runs = campaign(fuzz_entry_wide, 0x41DE_0004, 100_000);
+    assert!(runs >= 100_000, "only {runs} executions");
 }
 
 #[test]
 fn fuzz_replay_isolation_histories_never_diverge() {
     // Seed fixed for reproducibility: 0x1501_A7E5 (campaign 5).
-    let runs = campaign(fuzz_entry_isolation, 0x1501_A7E5, 20_000);
-    assert!(runs >= 20_000, "only {runs} executions");
+    let runs = campaign(fuzz_entry_isolation, 0x1501_A7E5, 100_000);
+    assert!(runs >= 100_000, "only {runs} executions");
 }

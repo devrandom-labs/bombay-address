@@ -95,7 +95,7 @@ fn run_history(ops: &[Op]) {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 512,
+        cases: 1024,
         ..ProptestConfig::default()
     })]
 
