@@ -450,6 +450,18 @@ validity.
   in proactively — a different selector yields different keys, so a
   rebuild can succeed and must cascade the old chain. **No divergence.**
 
+### Segment 28 — concurrent multi-tree cascade loom model
+
+- `tests/loom_model.rs` gained `concurrent_multi_tree_cascades_do_not_bleed`
+  (10th active model): two INDEPENDENT held-lease trees (endpoint 1
+  holds the lease of 3; endpoint 2 holds the lease of 4) released
+  concurrently while resolvers watch the inner addresses — each resolver
+  observes only its own tree's value or absence (no cross-tree bleed),
+  and both trees drain exactly. The prior nested-release loom model
+  covers one 2-chain; this extends to concurrent independent trees (the
+  release-graph shape under interleaving). Run and green under
+  `LOOM_MAX_PREEMPTIONS=3` (9 passed, 1 ignored FINDING-004).
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

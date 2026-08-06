@@ -413,3 +413,72 @@ fn reentrant_spawns_race_exactly_one_wins() {
         assert!(space.is_empty());
     });
 }
+
+/// Two INDEPENDENT held-lease trees (release-graph shape: endpoint 1
+/// holds the lease of 3; endpoint 2 holds the lease of 4) released
+/// concurrently while resolvers watch the inner addresses 3 and 4:
+/// each resolver observes only its own tree's value or absence — no
+/// cross-tree bleed — and both trees drain exactly.
+#[test]
+fn concurrent_multi_tree_cascades_do_not_bleed() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+
+        struct Holds {
+            value: u64,
+            inner: Option<Box<addresspass::Lease<u64, Holds>>>,
+        }
+        impl Clone for Holds {
+            fn clone(&self) -> Self {
+                Holds {
+                    value: self.value,
+                    inner: None, // clones never carry a lease (one-shot)
+                }
+            }
+        }
+
+        let leaf3 = space
+            .claim(3_u64, Holds { value: 300, inner: None })
+            .unwrap();
+        let tree1 = space
+            .claim(1_u64, Holds {
+                value: 100,
+                inner: Some(Box::new(leaf3)),
+            })
+            .unwrap();
+        let leaf4 = space
+            .claim(4_u64, Holds { value: 400, inner: None })
+            .unwrap();
+        let tree2 = space
+            .claim(2_u64, Holds {
+                value: 200,
+                inner: Some(Box::new(leaf4)),
+            })
+            .unwrap();
+
+        let releaser1 = thread::spawn(move || drop(tree1));
+        let releaser2 = thread::spawn(move || drop(tree2));
+        let resolver3 = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                if let Some(v) = space.resolve(&3) {
+                    assert_eq!(v.value, 300, "tree 1 resolver saw a foreign value");
+                }
+            })
+        };
+        let resolver4 = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                if let Some(v) = space.resolve(&4) {
+                    assert_eq!(v.value, 400, "tree 2 resolver saw a foreign value");
+                }
+            })
+        };
+        releaser1.join().unwrap();
+        releaser2.join().unwrap();
+        resolver3.join().unwrap();
+        resolver4.join().unwrap();
+        // Both trees fully cascaded.
+        assert!(space.is_empty());
+    });
+}
