@@ -402,6 +402,18 @@ validity.
   release is mirrored exactly. The SUT stayed consistent throughout,
   which is the campaign's finding-quality signal.
 
+### Segment 24 — isolation × cascade fuzz target
+
+- `fuzz_entry_isolation_cascade` (eleventh fuzz target
+  `addresspass_isolation_cascade`, replay campaign 11, seed
+  `0x1501_CA5C`, ~100,000 executions): two independent address spaces,
+  each hosting nested lease chains (build, mid-build abort cascade,
+  whole-chain cascade, resolve), with operations routed by a bit — no
+  cross-space bleed under chain mechanics. Each space is model-checked
+  separately at every step, plus a cross-check that BOTH stay in
+  lockstep. The isolation entry has no chains; the cascade entry has no
+  second space. **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

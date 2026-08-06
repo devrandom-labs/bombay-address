@@ -74,3 +74,9 @@ name = "addresspass_string_cascade"
 path = "fuzz_targets/addresspass_string_cascade.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_isolation_cascade"
+path = "fuzz_targets/addresspass_isolation_cascade.rs"
+test = false
+doc = false
