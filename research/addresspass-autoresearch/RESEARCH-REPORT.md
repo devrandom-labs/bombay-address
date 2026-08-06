@@ -383,6 +383,25 @@ validity.
   cascade drop path; the cascade lane never accounts endpoints. **No
   leak, no double drop.**
 
+### Segment 23 — string-key cascade fuzz target
+
+- `fuzz_entry_string_cascade` (tenth fuzz target
+  `addresspass_string_cascade`, replay campaign 10, seed `0x57A1_CA5C`,
+  ~100,000 executions): the chain mechanics of `fuzz_entry_cascade`
+  driven through short STRING keys on a 4-letter alphabet with
+  zero-padding variants — exercising the custom chunked hasher's `write`
+  path under nested-lease chain operations (the string fuzz lane has no
+  chains; the cascade lane has no hasher path). **No divergence.**
+- Model bug caught by the fuzzer during development (first draft
+  diverged at step 33, len 3 vs 5): unlike the contiguous u64/colliding
+  cascade variants — where a rebuild at an occupied slot ALWAYS collides
+  and aborts — non-contiguous letter-derived string addresses let a
+  rebuild at the same slot SUCCEED, and the slot overwrite dropped the
+  OLD chain (releasing its registrations through the top's cascade)
+  without the model mirroring it. Model fixed: the replaced chain's
+  release is mirrored exactly. The SUT stayed consistent throughout,
+  which is the campaign's finding-quality signal.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

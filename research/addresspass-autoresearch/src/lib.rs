@@ -918,3 +918,152 @@ pub fn fuzz_entry_colliding_cascade(data: &[u8]) {
     }
     assert!(space.is_empty() && model.is_empty());
 }
+
+/// String-key cascade variant of [`fuzz_entry`]: the chain mechanics of
+/// [`fuzz_entry_cascade`] driven through short STRING keys on a tiny
+/// alphabet with zero-padding variants — exercising the custom chunked
+/// hasher's `write` path under nested-lease chain operations (the string
+/// fuzz lane has no chains; the cascade lane has no hasher path).
+///
+/// Encoding: three bytes per operation. `op = b0 % 4` (build, cascade,
+/// resolve, len-check); `slot = (b0 / 4) % 4` selects one of four chain
+/// bases; `b1` gives the build depth (`1 + b1 % 8`); `b2` selects the
+/// string address (length 0..8 over a 4-letter alphabet, optional
+/// zero-pad extension).
+pub fn fuzz_entry_string_cascade(data: &[u8]) {
+    /// One chain link: value for identity, plus the next lease down.
+    struct Link {
+        value: u64,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<addresspass::Lease<String, Link>>>,
+    }
+
+    impl Clone for Link {
+        fn clone(&self) -> Self {
+            // A resolved snapshot must not own the chain below it.
+            Self {
+                value: self.value,
+                next: None,
+            }
+        }
+    }
+
+    const MAX_DEPTH: u64 = 8;
+
+    /// Slot address: a short string over a 4-letter alphabet seeded by
+    /// the slot; even offsets with an odd selector get a zero-pad
+    /// extension (hasher collision case). Different slots usually build
+    /// different strings, but the tiny alphabet still produces cross-slot
+    /// collisions the model must track via the abort path.
+    fn address_for(slot: usize, offset: u64, selector: u8) -> String {
+        let mut address = String::new();
+        let length = (usize::from(selector) % 8).max(1);
+        for i in 0..length {
+            let letter =
+                b"ab\0\xff"[usize::from(selector.wrapping_add((slot as u8).wrapping_add(i as u8))) % 4];
+            address.push(letter as char);
+        }
+        if offset.is_multiple_of(2) && selector % 2 == 1 {
+            address.push('\0'); // zero-pad extension: hasher collision case
+        }
+        address
+    }
+
+    let space = addresspass::AddressSpace::<String, Link>::new();
+    let mut model: std::collections::BTreeMap<String, u64> = Default::default();
+    type ChainSlot = Option<(addresspass::Lease<String, Link>, Vec<String>)>;
+    let mut chains: [ChainSlot; 4] = [None, None, None, None];
+    for (step, triple) in data.chunks_exact(3).enumerate() {
+        let slot = usize::from(triple[0] / 4) % 4;
+        match triple[0] % 4 {
+            0 => {
+                let depth = 1 + u64::from(triple[1]) % MAX_DEPTH;
+                let mut next: Option<Box<addresspass::Lease<String, Link>>> = None;
+                let mut claimed: Vec<String> = Vec::new();
+                let mut aborted = false;
+                for offset in (0..depth).rev() {
+                    let address = address_for(slot, offset, triple[2]);
+                    match space.claim(address.clone(), Link { value: offset, next: next.take() }) {
+                        Ok(lease) => {
+                            assert!(
+                                model.insert(address.clone(), offset).is_none(),
+                                "step {step}: SUT claimed an address the model owns"
+                            );
+                            claimed.push(address);
+                            next = Some(Box::new(lease));
+                        }
+                        Err(addresspass::AddressInUse(returned)) => {
+                            assert_eq!(returned, address, "step {step}");
+                            assert!(
+                                model.contains_key(&address),
+                                "step {step}: SUT rejected an address the model owns"
+                            );
+                            aborted = true;
+                            break;
+                        }
+                    }
+                }
+                if aborted {
+                    for address in claimed {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: partial cascade released an address the model did not own"
+                        );
+                    }
+                } else {
+                    let top = *next.expect("depth >= 1");
+                    // Replacing a live chain drops its top, cascading the
+                    // OLD chain through endpoint drops (non-contiguous
+                    // letter-derived string addresses let a rebuild avoid
+                    // the old range — unlike the contiguous u64/colliding
+                    // variants, where a rebuild always collides and
+                    // aborts). Mirror that release before storing.
+                    if let Some((old_top, old_addresses)) = chains[slot].take() {
+                        drop(old_top);
+                        for address in old_addresses {
+                            assert!(
+                                model.remove(&address).is_some(),
+                                "step {step}: replaced chain released an address the model did not own"
+                            );
+                        }
+                    }
+                    chains[slot] = Some((top, claimed));
+                }
+            }
+            1 => {
+                if let Some((top, addresses)) = chains[slot].take() {
+                    top.release();
+                    for address in addresses {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: cascade released an address the model did not own"
+                        );
+                    }
+                }
+            }
+            2 => {
+                let address = address_for(slot, u64::from(triple[1]) % MAX_DEPTH, triple[2]);
+                assert_eq!(
+                    space.resolve(&address).map(|l| l.value),
+                    model.get(&address).copied(),
+                    "step {step}: resolve({address:?}) diverged"
+                );
+            }
+            _ => {
+                assert_eq!(space.len(), model.len(), "step {step}: len diverged");
+            }
+        }
+    }
+    for slot in &mut chains {
+        if let Some((top, addresses)) = slot.take() {
+            top.release();
+            for address in addresses {
+                model.remove(&address);
+            }
+        }
+    }
+    assert!(space.is_empty() && model.is_empty());
+}
