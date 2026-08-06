@@ -106,3 +106,70 @@ fn resolve_overlapping_final_release_returns_snapshot_or_absence() {
         assert!(space.is_empty());
     });
 }
+
+/// FINDING-004: the loom build's poison recovery is unreachable.
+///
+/// Production's `cfg(loom)` path uses `loom::sync::RwLock` with
+/// `unwrap_or_else(recover)` to survive a poisoned lock. But loom 0.7's
+/// `RwLock::read()`/`write()` NEVER return `Err(PoisonError)`: on a
+/// poisoned lock they panic in-band (`"loom::RwLock state corrupt"`)
+/// before handing out any result, so `recover` is dead code and ANY panic
+/// while holding the write guard makes every subsequent operation on the
+/// space panic too — in the loom build, one bad caller `Hash` permanently
+/// kills the address space. (Native builds use parking_lot, which never
+/// poisons, so `recover` is dead code there as well.)
+///
+/// The active assertion expresses the correct behavior: operations after
+/// a caught poisoning panic recover and observe a consistent table.
+#[test]
+#[ignore = "FINDING-004: loom::RwLock panics in-band on poisoned state; production's recover() is unreachable and the space dies permanently after any mid-write panic"]
+fn poisoned_write_lock_recovers_and_stays_consistent() {
+    use std::hash::{Hash, Hasher};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[derive(Clone, Debug)]
+    struct MaybePanic {
+        id: u64,
+        panic: bool,
+    }
+    impl PartialEq for MaybePanic {
+        fn eq(&self, other: &Self) -> bool {
+            self.id == other.id
+        }
+    }
+    impl Eq for MaybePanic {}
+    impl Hash for MaybePanic {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            if self.panic {
+                panic!("injected hash panic under the write guard");
+            }
+            state.write_u64(self.id);
+        }
+    }
+
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+        let crasher = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    let _ = space.claim(MaybePanic { id: 1, panic: true }, 10_u64);
+                }));
+                assert!(result.is_err(), "injected panic must propagate");
+            })
+        };
+        crasher.join().unwrap();
+
+        // The write lock was poisoned mid-claim; recovery must yield a
+        // working, consistent space with no ghost registration.
+        assert!(space.is_empty());
+        let good = MaybePanic {
+            id: 1,
+            panic: false,
+        };
+        let lease = space.claim(good.clone(), 20_u64).unwrap();
+        assert_eq!(space.resolve(&good), Some(20));
+        lease.release();
+        assert!(space.is_empty());
+    });
+}

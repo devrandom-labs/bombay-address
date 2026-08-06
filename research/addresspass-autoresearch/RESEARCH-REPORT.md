@@ -141,6 +141,116 @@ a re-entrant `Hash` self-deadlocks.**
   correct behavior — retention ≤ 64 KiB after a full drain).
 - No fix attempted (production is immutable for this campaign).
 
+### Segment 2 — panic safety, linearizability checking, string addresses, poison lane
+
+New lanes (all native unless noted):
+
+- Panic safety (`tests/panic_safety.rs`): injected `Hash` panics during
+  `claim`'s duplicate check and during `claim`'s insert (table pre-seeded:
+  hashbrown's `get` on an EMPTY table returns without hashing, so the call
+  sequence differs by table occupancy — recorded here as an observed
+  implementation fact). Space stays consistent; no ghost registrations.
+  Panicking endpoint `Clone` during `resolve` leaves the space usable.
+  Re-entrant address `Clone` during `claim` (claims + releases a scratch
+  address in the same space) does not deadlock — key `Clone` runs before
+  the write guard, as documented. **All pass.** FINDING-003 (below) lives
+  in this file.
+- Linearizability (`tests/linearizability.rs`): 4 threads × 5 rounds on
+  one hot address, every op timed with a global sequence counter; a
+  backtracking checker (bitmask DP over per-thread-prefix states,
+  real-time precedence) decides whether a legal sequential ordering
+  exists. The recorded history **is linearizable**. The checker is
+  self-validated: it rejects four fabricated illegal histories
+  (double-claim, phantom resolve, stale miss, wrong reject) and accepts
+  the legal versions — the test can actually fail.
+- String addresses (`tests/string_address_proptest.rs`): proptest state
+  machine (256 cases) over short strings on a tiny alphabet plus
+  zero-padded variants, against an independent `BTreeMap` oracle.
+  **No divergence.** A deterministic test confirms zero-padding collision
+  pairs coexist as distinct keys.
+- Loom poison lane: the poison-recovery model exposed FINDING-004
+  (below); converted to an ignored reproducer.
+
+Hash-quality observation (code inspection, not a defect):
+`AddressHasher::write` zero-pads the final short chunk, so `"a"` and
+`"a\0\0\0\0\0\0\0"` produce identical 64-bit hashes (verified by tracing
+the fold: both yield word `0x61` from the first chunk, identical state
+thereafter). Correctness is unaffected (Eq distinguishes the keys; the
+coexistence test above passes), and addresses are process-internal, so
+this is recorded as a limitation of the hasher's documented
+"order-sensitive, cannot collide by permutation" claim — zero-EXTENSION
+collisions exist — not as a finding. The hasher is `pub(crate)`, so no
+external test can exercise it directly without reimplementation (which
+the campaign rules forbid).
+
+## FINDING-003
+
+**`Lease::release` is not panic-atomic: a panicking `Hash`/`Eq` during
+removal permanently wedges the address.**
+
+- Expected: release either completes or leaves the registration
+  releasable (panic-atomicity). After catching a panic from caller code
+  during `release`, the address must be free or the lease must still
+  exist to retry.
+- Actual: `release_inner` sets `released = true` BEFORE calling
+  `remove_if`. If the address's `Hash` (or `Eq`) panics during the
+  removal, the unwind consumes the lease — its `Drop` early-returns on
+  the `released` flag — while the entry was never removed. The address
+  stays claimed forever: `resolve` returns the endpoint, `claim` fails
+  with `AddressInUse`, and no handle exists that can ever release it.
+- Severity: medium. Requires panicking caller `Hash`/`Eq` (legal safe
+  Rust; no unsafe involved). Liveness/availability defect: a permanent
+  resource leak of one address per caught panic. Same root-cause class
+  as FINDING-001 (caller code runs under the lock); the FIX (production
+  owners' call) would be to set `released` only after a successful
+  removal.
+- Affected version: addresspass 0.1.0 (baseline `adc64da`, campaign base
+  `d0a4ee2`).
+- Reproduce:
+  `cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test panic_safety -- --ignored`
+- Regression test: `tests/panic_safety.rs`,
+  `release_panic_does_not_wedge_the_address` (ignored; assertion
+  expresses the correct behavior — the registration is gone after a
+  caught release panic). Fails deterministically: the entry leaks.
+- No fix attempted (production is immutable for this campaign).
+
+## FINDING-004
+
+**The loom build's poison recovery is unreachable; any mid-write panic
+kills the space permanently (loom builds).**
+
+- Expected: production's `cfg(loom)` path recovers poisoned
+  `std::sync::RwLock` guards via `unwrap_or_else(recover)`, so a thread
+  panicking while holding the write guard (e.g. caller `Hash` code) does
+  not take down the space: later operations recover and observe a
+  consistent table.
+- Actual: loom 0.7's `RwLock::read()`/`write()` NEVER return
+  `Err(PoisonError)` — they return `Ok` unconditionally, and the inner
+  guard acquisition does `.expect("loom::RwLock state corrupt")`, which
+  panics in-band when the lock is poisoned (loom-0.7.2
+  `src/sync/rwlock.rs:52,68,86,102`). `recover` is therefore dead code:
+  it can never observe an `Err`. The first operation after a poisoning
+  panic dies with `loom::RwLock state corrupt: "Poisoned(..)"` at
+  `crates/addresspass/src/lib.rs:36` — in loom builds, one panicking
+  caller `Hash` permanently kills the address space.
+- Severity: low. The loom configuration is a test-only build; native
+  builds use parking_lot, which never poisons (so `recover` is dead code
+  natively too). The finding matters because the production research log
+  cites the loom lane as covering the std-RwLock semantics, and the
+  poison/recovery path is in fact unexercised and unexercisable in its
+  current form. Recorded for the production owners; options include
+  gating `recover` away honestly or modelling poison with a real
+  `std::sync::RwLock` shard inside loom models.
+- Affected version: addresspass 0.1.0 (baseline `adc64da`, campaign base
+  `d0a4ee2`); loom 0.7.2.
+- Reproduce:
+  `LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test loom_model --release -- --ignored`
+- Regression test: `tests/loom_model.rs`,
+  `poisoned_write_lock_recovers_and_stays_consistent` (ignored; assertion
+  expresses the correct behavior — post-poison operations succeed and
+  the table is consistent). Fails deterministically.
+- No fix attempted (production is immutable for this campaign).
+
 ## Miri
 
 - Command: `nix develop .#miri --command cargo miri test
@@ -160,11 +270,12 @@ a re-entrant `Hash` self-deadlocks.**
 ## Interrupted or bounded verification (honest bounds)
 
 - Loom: exhaustive only within `LOOM_MAX_PREEMPTIONS=3`; deeper schedules
-  unexplored.
+  unexplored. The poison-recovery model is FINDING-004 (ignored).
 - Fuzzing: deterministic seeded mutation, not coverage-guided (stable
   toolchain constraint). No time-bounded libFuzzer campaign was run.
 - Generation exhaustion: untestable (theoretical note above).
-- Poison/recovery: production's poison-recovery path exists only under
-  `cfg(loom)` (std `RwLock` + `recover`); the native path uses
-  parking_lot, which never poisons. A panic-injection loom model is
-  planned for a later segment.
+- Poison/recovery: natively untestable (parking_lot never poisons) and
+  loom-untestable (FINDING-004). The `recover` path is dead code in both
+  build configurations; no executed test can cover it.
+- Linearizability checker: histories capped at 63 ops (bitmask DP);
+  single hot address; claim/release/resolve only.
