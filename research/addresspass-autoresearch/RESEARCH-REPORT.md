@@ -329,6 +329,21 @@ validity.
   than five addresses. **No divergence.** Suite total now ~1,265,658
   exhaustive histories.
 
+### Segment 19 — reentrant-spawn loom model
+
+- `tests/loom_model.rs` gained `reentrant_spawns_race_exactly_one_wins`
+  (9th active model): two endpoints whose `Drop` both claim the SAME
+  spawn address (3), racing each other and a resolver. Exactly one spawn
+  claim wins (exclusive ownership); the resolver observes only the
+  winner's value (101 or 102) or absence — never a torn or foreign
+  value; the parked winner drains exactly. Run and green under
+  `LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test
+  --manifest-path research/addresspass-autoresearch/Cargo.toml --test
+  loom_model --release` (8 passed, 1 ignored FINDING-004). Closes the
+  Segment 15 reentrant-spawn surface's concurrency gap: the fuzz lane is
+  single-threaded, so the spawn-race was not previously interleaving-
+  checked.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

@@ -334,3 +334,82 @@ fn nested_release_racing_resolve_stays_consistent() {
         assert!(space.is_empty());
     });
 }
+
+/// Two endpoints whose `Drop` both CLAIM the same spawn address, racing
+/// each other and a resolver: exactly one spawn claim wins (exclusive
+/// ownership of 3), the resolver observes only the winner's value or
+/// absence — never a torn or foreign value — and the parked winner
+/// drains exactly.
+#[test]
+fn reentrant_spawns_race_exactly_one_wins() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+        let bag = loom::sync::Arc::new(loom::sync::Mutex::new(Vec::new()));
+
+        struct Spawner {
+            value: u64,
+            space: loom::sync::Arc<AddressSpace<u64, Box<Spawner>>>,
+            bag: loom::sync::Arc<loom::sync::Mutex<Vec<addresspass::Lease<u64, Box<Spawner>>>>>,
+            spawn: Option<u64>,
+        }
+        impl Clone for Spawner {
+            fn clone(&self) -> Self {
+                Spawner {
+                    value: self.value,
+                    space: loom::sync::Arc::clone(&self.space),
+                    bag: loom::sync::Arc::clone(&self.bag),
+                    spawn: None, // snapshots and spawned endpoints never spawn again
+                }
+            }
+        }
+        impl Drop for Spawner {
+            fn drop(&mut self) {
+                if let Some(spawn) = self.spawn {
+                    let spawned = Spawner {
+                        value: self.value,
+                        space: loom::sync::Arc::clone(&self.space),
+                        bag: loom::sync::Arc::clone(&self.bag),
+                        spawn: None,
+                    };
+                    if let Ok(lease) = self.space.claim(spawn, Box::new(spawned)) {
+                        self.bag.lock().unwrap().push(lease);
+                    }
+                }
+            }
+        }
+
+        let spawner = |value| Box::new(Spawner {
+            value,
+            space: loom::sync::Arc::clone(&space),
+            bag: loom::sync::Arc::clone(&bag),
+            spawn: Some(3),
+        });
+        let first = space.claim(1_u64, spawner(101)).unwrap();
+        let second = space.claim(2_u64, spawner(102)).unwrap();
+
+        let releaser1 = thread::spawn(move || drop(first));
+        let releaser2 = thread::spawn(move || drop(second));
+        let resolver = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                if let Some(v) = space.resolve(&3) {
+                    // Only a winner's value — 101 or 102 — never torn.
+                    assert!(v.value == 101 || v.value == 102, "foreign spawn value");
+                }
+            })
+        };
+        releaser1.join().unwrap();
+        releaser2.join().unwrap();
+        resolver.join().unwrap();
+
+        // Exactly one spawn claim won: 3 is live with one of the two
+        // values, and the bag holds exactly that one lease.
+        let parked = bag.lock().unwrap().drain(..).collect::<Vec<_>>();
+        assert_eq!(parked.len(), 1, "exactly one spawn must win");
+        for lease in parked {
+            drop(lease);
+        }
+        assert!(space.resolve(&3).is_none());
+        assert!(space.is_empty());
+    });
+}
