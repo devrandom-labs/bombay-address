@@ -134,3 +134,54 @@ fn top_release_cascades_whole_chain() {
     top.release();
     assert!(space.is_empty());
 }
+
+/// Deterministic pinpoint: a build whose range collides with a live chain
+/// aborts mid-way; the partial chain is released through the rejected
+/// endpoint's drop cascade, and the live chain is left untouched.
+#[test]
+fn colliding_build_aborts_and_releases_partial_chain() {
+    let space = AddressSpace::<u64, Link>::new();
+    let (top, _addresses) = build_chain(&space, 0, 3); // owns 0, 1, 2
+    assert_eq!(space.len(), 3);
+
+    // Attempt a deeper build at the same base: claims 5, 4, then 3
+    // succeed; the claim of 2 collides and the partial chain (3, 4, 5)
+    // must cascade back out.
+    let mut next: Option<Box<Lease<u64, Link>>> = None;
+    let mut claimed: Vec<u64> = Vec::new();
+    let mut aborted = false;
+    for offset in (0..6).rev() {
+        let address = offset;
+        match space.claim(address, Link { value: address, next: next.take() }) {
+            Ok(lease) => {
+                claimed.push(address);
+                next = Some(Box::new(lease));
+            }
+            Err(addresspass::AddressInUse(returned)) => {
+                assert_eq!(returned, address);
+                aborted = true;
+                break;
+            }
+        }
+    }
+    assert!(aborted, "colliding build must abort");
+    drop(next); // rejected endpoint's partial chain cascades on drop
+
+    // Exactly the original three registrations remain.
+    assert_eq!(space.len(), 3);
+    for address in 0..3 {
+        assert!(
+            space.resolve(&address).is_some(),
+            "live chain lost {address}"
+        );
+    }
+    for address in 3..6 {
+        assert!(
+            space.resolve(&address).is_none(),
+            "partial chain leaked {address}"
+        );
+    }
+    assert_eq!(claimed, vec![5, 4, 3]);
+    drop(top);
+    assert!(space.is_empty());
+}

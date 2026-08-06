@@ -244,6 +244,25 @@ validity.
   and random resolves, model-checked per step; 256 cases. Pinpoint test:
   top release cascades a whole 3-chain. **No divergence.**
 
+### Segment 14 — cascade fuzz target + mid-build abort path
+
+- `fuzz_entry_cascade` (sixth fuzz target `addresspass_cascade`, replay
+  campaign 6, seed `0xC45C_ADE0`, ~100,000 executions): nested lease
+  chains built at 4 fixed bases, with random builds, whole-chain cascades,
+  resolves, and len checks, model-checked per step. Build depth is random
+  (`1 + b1 % 8`); a build whose range collides with a live chain aborts
+  mid-way and the partial chain is released through the rejected
+  endpoint's drop cascade — the model tracks the partial chain exactly
+  (claimed addresses are removed from the model on abort). **No
+  divergence.**
+- Deterministic pinpoint (`tests/cascade_proptest.rs`,
+  `colliding_build_aborts_and_releases_partial_chain`): a 6-deep build
+  over a live 3-chain claims 5, 4, 3, then collides on 2; the partial
+  chain (3, 4, 5) cascades back out, the original three registrations
+  survive untouched, and the space drains exactly. **Pass.** This pins the
+  mid-build abort cascade — previously only reachable implicitly, now
+  fuzzed and pinned.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
