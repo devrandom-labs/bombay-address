@@ -246,3 +246,36 @@ fn two_address_three_thread_interleaving_has_no_cross_bleed() {
         assert!(space.is_empty());
     });
 }
+
+/// Four claimants over two addresses: each address admits exactly one
+/// owner, and afterwards both registrations drain exactly.
+#[test]
+fn four_claimants_two_addresses_exact_ownership() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+        let claimants: Vec<_> = (0..4_u64)
+            .map(|i| {
+                let space = Arc::clone(&space);
+                let address = i % 2;
+                let endpoint = (i + 1) * 10;
+                thread::spawn(move || space.claim(address, endpoint))
+            })
+            .collect();
+        let mut leases = Vec::new();
+        for claimant in claimants {
+            if let Ok(lease) = claimant.join().unwrap() {
+                leases.push(lease);
+            }
+        }
+        // Exactly one winner per address.
+        assert_eq!(leases.len(), 2);
+        let winner0 = space.resolve(&0).unwrap();
+        let winner1 = space.resolve(&1).unwrap();
+        assert!(winner0 == 10 || winner0 == 30, "address 0 winner {winner0}");
+        assert!(winner1 == 20 || winner1 == 40, "address 1 winner {winner1}");
+        for lease in leases {
+            drop(lease);
+        }
+        assert!(space.is_empty());
+    });
+}

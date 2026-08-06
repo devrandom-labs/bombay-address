@@ -192,6 +192,20 @@ replacement), and premature endpoint drop under the write guard. See
 FINDING-005. An active identity-Clone control test pins harness
 validity.
 
+### Segment 10 — breadth adds, deep fuzz soak
+
+- Exhaustive: added 5 addresses depth ≤ 4 (**54,240 histories, no
+  divergence**) — 989,484 exhaustive histories per suite run total.
+- Loom model added: four claimants over two addresses, exactly one
+  winner per address (7 active models + 1 ignored reproducer).
+- Fuzz replay gained a `FUZZ_EXECUTIONS` override (deterministic for a
+  given count; gate default stays 100,000 per campaign). A deep soak of
+  5,000,000 executions per campaign × 5 campaigns (25M total) was run in
+  release mode: **all green in 4.4 s — no divergence.** Command:
+  `FUZZ_EXECUTIONS=5000000 cargo test --manifest-path
+  research/addresspass-autoresearch/Cargo.toml --test fuzz_replay
+  --release`
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

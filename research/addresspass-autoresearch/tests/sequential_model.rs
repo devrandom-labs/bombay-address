@@ -139,6 +139,14 @@ fn exhaustive_four_address_histories_up_to_depth_5_match_model() {
 }
 
 #[test]
+// 5 addresses, 15 symbols per position, depths 1..=4: 54,240 histories.
+// Native-only.
+#[cfg_attr(miri, ignore = "exhaustive exploration is a native-speed workload")]
+fn exhaustive_five_address_histories_up_to_depth_4_match_model() {
+    assert_eq!(explore_all::<5>(4), 54_240);
+}
+
+#[test]
 fn stale_generation_is_unreachable_through_the_public_api() {
     // Documented invariant: releasing an old generation cannot remove a
     // newer one. Through the public API a stale lease cannot exist — a
