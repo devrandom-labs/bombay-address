@@ -1,27 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-cargo fmt --all -- --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom -D warnings" \
-  cargo test -p addresspass --test loom --test loom_model --release
-
-base=$(cat .auto/BASELINE 2>/dev/null || true)
-if [ -n "${base}" ]; then
-  frozen=(
-    .auto/checks.sh
-    .auto/measure.sh
-    crates/addresspass/tests/semantics.rs
-    crates/addresspass/tests/loom.rs
-    crates/addresspass/tests/loom_model.rs
-    crates/addresspass/benches/address_space.rs
-    crates/addresspass-perf
-  )
-  git diff --quiet "${base}" -- "${frozen[@]}" || {
-    echo "CHECK FAIL: frozen oracle or measurement surface changed"
-    exit 1
-  }
+base=$(cat .auto/BASELINE)
+git diff --quiet "$base" -- crates Cargo.toml Cargo.lock README.md docs AGENTS.md || { echo "CHECK FAIL: production changed"; exit 1; }
+git diff --quiet "$base" -- .auto ':!.auto/BASELINE' autoresearch.sh || { echo "CHECK FAIL: research rules changed"; exit 1; }
+if test -f research/addresspass-autoresearch/Cargo.toml; then
+  cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --all-targets --no-fail-fast
+  cargo clippy --manifest-path research/addresspass-autoresearch/Cargo.toml --all-targets -- -D warnings
 fi
-
 echo "CHECK OK"

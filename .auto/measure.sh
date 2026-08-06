@@ -1,22 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-export RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native"
-cargo build -q -p addresspass-perf --release
-./target/release/addresspass-perf >/dev/null
-
-best=0
-output=""
-for _ in 1 2 3 4 5; do
-  run=$(./target/release/addresspass-perf)
-  score=$(printf '%s\n' "${run}" | sed -n 's/^SCORE=//p')
-  if awk -v candidate="${score}" -v current="${best}" 'BEGIN { exit !(candidate > current) }'; then
-    best=${score}
-    output=${run}
-  fi
-done
-
-echo "METRIC score=${best} unit=resolve_ops_per_second"
-printf '%s\n' "${output}" | sed -n 's/^THROUGHPUT_OPS=/METRIC throughput_ops=/p'
-printf '%s\n' "${output}" | sed -n 's/^RESOLVE_NS=/METRIC resolve_ns=/p'
-
+root=research/addresspass-autoresearch
+tests=$(rg -g '*.rs' -c '#\[(tokio::)?test' "$root" 2>/dev/null | awk -F: '{n+=$2} END{print n+0}')
+properties=$(rg -g '*.rs' -c 'proptest!|quickcheck' "$root" 2>/dev/null | awk -F: '{n+=$2} END{print n+0}')
+fuzz=$(find "$root" -path '*/fuzz_targets/*.rs' -type f 2>/dev/null | wc -l | tr -d ' ')
+findings=$(rg -c '^## FINDING-' "$root/RESEARCH-REPORT.md" 2>/dev/null | awk -F: '{n+=$2} END{print n+0}')
+echo "METRIC score=$((tests + 5*properties + 10*fuzz + 25*findings)) unit=adversarial_evidence"
+echo "METRIC tests=$tests"; echo "METRIC properties=$properties"; echo "METRIC fuzz_targets=$fuzz"; echo "METRIC findings=$findings"
