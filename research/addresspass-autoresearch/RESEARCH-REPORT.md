@@ -206,6 +206,17 @@ validity.
   research/addresspass-autoresearch/Cargo.toml --test fuzz_replay
   --release`
 
+### Segment 11 — nested reentrancy
+
+- Nested release cascade (`tests/nested_reentrancy.rs`): an endpoint
+  owning another lease — releasing the outer cascades through endpoint
+  drops (3-deep chain), draining exactly with no deadlock. Nested claim:
+  an endpoint whose `Drop` claims and releases a new registration.
+  Both run under Miri too (no gate). **Pass.**
+- Loom model added: nested release racing a resolver of the inner
+  address — no torn state, exact drain (8 active models + 1 ignored
+  reproducer).
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

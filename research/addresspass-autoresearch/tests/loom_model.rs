@@ -279,3 +279,58 @@ fn four_claimants_two_addresses_exact_ownership() {
         assert!(space.is_empty());
     });
 }
+
+/// Nested release under interleaving: the endpoint at address 1 owns the
+/// lease for address 2. Releasing address 1 cascades through the
+/// endpoint's drop; a concurrent resolver of address 2 must observe
+/// either its endpoint or absence — never a torn state — and the final
+/// drain must be exact.
+#[test]
+fn nested_release_racing_resolve_stays_consistent() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+
+        struct Holds {
+            value: u64,
+            inner: Option<Box<addresspass::Lease<u64, Holds>>>,
+        }
+        impl Clone for Holds {
+            fn clone(&self) -> Self {
+                Holds {
+                    value: self.value,
+                    inner: None, // clones never carry a lease (one-shot)
+                }
+            }
+        }
+
+        let inner = space
+            .claim(2_u64, Holds {
+                value: 200,
+                inner: None,
+            })
+            .unwrap();
+        let outer = space
+            .claim(1_u64, Holds {
+                value: 100,
+                inner: Some(Box::new(inner)),
+            })
+            .unwrap();
+
+        let releaser = thread::spawn(move || drop(outer));
+        let resolver = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                if let Some(v) = space.resolve(&2) {
+                    assert_eq!(v.value, 200, "torn nested release observed");
+                }
+            })
+        };
+        releaser.join().unwrap();
+        resolver.join().unwrap();
+        // The cascade may or may not have completed for the resolver's
+        // schedule, but after the releaser joined, both are gone.
+        assert!(space.resolve(&1).is_none());
+        assert!(space.resolve(&2).is_none());
+        assert!(space.is_empty());
+    });
+}
