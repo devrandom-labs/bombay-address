@@ -516,6 +516,17 @@ validity.
   chains; the combination was untested. **Pass** natively AND under Miri
   (all 5 nested_reentrancy tests green).
 
+### Segment 34 — reentrant-spawn × collision fuzz target
+
+- `fuzz_entry_reentrant_colliding` (thirteenth fuzz target
+  `addresspass_reentrant_colliding`, replay campaign 13, seed
+  `0x52E3_C011`, ~100,000 executions): the spawn-on-drop mechanics of
+  `fuzz_entry_reentrant` driven through constant-hash keys — every
+  spawn claim, drop-time claim, and release runs through ONE hash bucket
+  (the reentrant lane has no collisions; the colliding lane has no
+  spawns). The model mirrors spawns on release AND on failed-claim
+  endpoint drops (Segment 15 lesson). **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

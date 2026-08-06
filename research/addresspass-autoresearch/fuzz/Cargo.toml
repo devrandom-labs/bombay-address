@@ -86,3 +86,9 @@ name = "addresspass_wide_cascade"
 path = "fuzz_targets/addresspass_wide_cascade.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_reentrant_colliding"
+path = "fuzz_targets/addresspass_reentrant_colliding.rs"
+test = false
+doc = false
