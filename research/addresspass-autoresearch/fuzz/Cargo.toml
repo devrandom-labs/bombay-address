@@ -1,0 +1,28 @@
+[package]
+name = "addresspass-autoresearch-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Detached workspace: the repository root manifest is immutable.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+addresspass-autoresearch = { path = ".." }
+addresspass = { path = "../../../crates/addresspass" }
+
+[[bin]]
+name = "addresspass_ops"
+path = "fuzz_targets/addresspass_ops.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "addresspass_colliding"
+path = "fuzz_targets/addresspass_colliding.rs"
+test = false
+doc = false

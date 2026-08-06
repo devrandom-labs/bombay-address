@@ -1,0 +1,99 @@
+//! Deterministic fuzz campaign on the stable toolchain.
+//!
+//! cargo-fuzz/libFuzzer requires a nightly sanitizer build that this
+//! repository's pinned stable toolchain does not provide, so coverage-
+//! guided fuzzing is approximated honestly: a fixed-seed mutational fuzzer
+//! (xorshift64*) drives the exact entry points the libFuzzer targets call,
+//! over a hand-written seed corpus plus PRNG-generated seeds. Every run is
+//! bit-for-bit reproducible; seeds, mutation operators, and execution
+//! counts are recorded in RESEARCH-REPORT.md.
+//!
+//! A crash (divergence between SUT and reference model) fails the test and
+//! prints the offending input for minimization.
+//!
+//! Excluded from Miri (execution counts are tuned for native speed).
+#![cfg(not(miri))]
+
+use addresspass_autoresearch::{XorShift64Star, fuzz_entry, fuzz_entry_colliding};
+
+/// Hand-written seeds: structured histories exercising claim/release/
+/// resolve overlap, boundary addresses (0 and 15), and empty input.
+const SEEDS: &[&[u8]] = &[
+    &[],
+    &[0, 1],
+    &[0, 1, 2, 0, 1, 0],
+    // claim addr 0, resolve addr 0, release addr 0, resolve addr 0
+    &[0, 7, 2, 0, 1, 0, 2, 0],
+    // double claim on addr 0, then release twice
+    &[0, 9, 0, 10, 1, 0, 1, 0, 3, 0],
+    // boundary address 15 (0b1111 << 2 | op)
+    &[60, 5, 62, 0, 61, 0, 62, 0],
+    // all-op walk across every address
+    &[
+        0, 1, 4, 2, 8, 3, 12, 4, 16, 5, 20, 6, 24, 7, 28, 8, 32, 9, 36, 10, 40, 11, 44, 12, 48, 13,
+        52, 14, 56, 15, 60, 16,
+    ],
+];
+
+/// One deterministic mutation step: flip a random byte to a random value,
+/// truncate, or duplicate a slice — the classic mutation operators, driven
+/// by the seeded PRNG so the whole campaign replays identically.
+fn mutate(rng: &mut XorShift64Star, input: &mut Vec<u8>) {
+    if input.is_empty() || rng.below(4) == 0 {
+        let len = 1 + rng.below(64);
+        input.clear();
+        for _ in 0..len {
+            input.push(rng.next_u64() as u8);
+        }
+        return;
+    }
+    match rng.below(3) {
+        0 => {
+            let index = rng.below(input.len() as u64) as usize;
+            input[index] = rng.next_u64() as u8;
+        }
+        1 => {
+            let keep = 1 + rng.below(input.len() as u64) as usize;
+            input.truncate(keep);
+        }
+        _ => {
+            let split = rng.below(input.len() as u64) as usize;
+            let tail: Vec<u8> = input[split..].to_vec();
+            input.extend_from_slice(&tail);
+        }
+    }
+}
+
+fn campaign(entry: fn(&[u8]), seed: u64, executions: u64) -> u64 {
+    let mut rng = XorShift64Star::new(seed);
+    let mut input: Vec<u8> = Vec::new();
+    let mut runs = 0_u64;
+    for seed_bytes in SEEDS {
+        input.clear();
+        input.extend_from_slice(seed_bytes);
+        entry(&input);
+        runs += 1;
+        // Mutate each seed in a deterministic chain.
+        for _ in 0..(executions / (SEEDS.len() as u64)) {
+            mutate(&mut rng, &mut input);
+            let snapshot = input.clone();
+            entry(&snapshot);
+            runs += 1;
+        }
+    }
+    runs
+}
+
+#[test]
+fn fuzz_replay_ops_histories_never_diverge() {
+    // Seed fixed for reproducibility: 0xA55E_0001 (campaign 1).
+    let runs = campaign(fuzz_entry, 0xA55E_0001, 20_000);
+    assert!(runs >= 20_000, "only {runs} executions");
+}
+
+#[test]
+fn fuzz_replay_colliding_histories_never_diverge() {
+    // Seed fixed for reproducibility: 0xC011_1D1E (campaign 2).
+    let runs = campaign(fuzz_entry_colliding, 0xC011_1D1E, 20_000);
+    assert!(runs >= 20_000, "only {runs} executions");
+}
