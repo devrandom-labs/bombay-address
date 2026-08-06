@@ -361,9 +361,10 @@ kills the space permanently (loom builds).**
   stress tests are gated `cfg(not(miri))` or `cfg_attr(miri, ignore)`:
   they are native-speed workloads and would take hours interpreted.
 - Result: **all green, exit 0** (nightly 1.99.0-nightly 2026-08-04, Miri
-  2026-08-05 build). 3 `miri_ownership` tests (6.2 s interpreted) + 6
-  non-gated sequential tests (19.0 s). No undefined behavior, no leaks,
-  no data races detected in the exercised paths.
+  2026-08-05 build). Final suite: `miri_ownership` (3), `panic_safety`
+  (4 active), `sequential_model` (6 active + 3 ignored exhaustive),
+  `space_lifetime` (7, incl. cross-thread lease migration). No undefined
+  behavior, no leaks, no data races detected in the exercised paths.
 
 ## Interrupted or bounded verification (honest bounds)
 
