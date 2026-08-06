@@ -27,10 +27,10 @@ struct Tracked {
 /// Replay a full history against a fresh SUT and a fresh model, asserting
 /// every observable result agrees: claim success/failure, the address
 /// returned in `AddressInUse`, every resolve result, and the live count.
-fn replay(path: &[Op]) {
+fn replay<const N: usize>(path: &[Op]) {
     let space = AddressSpace::<u64, u64>::new();
     let mut model = ReferenceModel::new();
-    let mut leases: [Option<Tracked>; 2] = [None, None];
+    let mut leases: [Option<Tracked>; N] = [(); N].map(|_| None);
     for (step, op) in path.iter().enumerate() {
         match *op {
             Op::Claim(address) => {
@@ -80,28 +80,38 @@ fn replay(path: &[Op]) {
     assert!(space.is_empty());
 }
 
-/// Exhaustively enumerate every history over two addresses up to `depth`
-/// operations long: 6 symbols per position (claim/resolve/release ×
-/// address 0/1), 6^depth leaves, each replayed from a clean state.
-fn explore(path: &mut Vec<Op>, depth: usize, histories: &mut u64) {
+/// Exhaustively enumerate every history over `N` addresses up to `depth`
+/// operations long: 3·N symbols per position (claim/resolve/release ×
+/// address), (3·N)^depth leaves, each replayed from a clean state.
+fn explore<const N: usize>(path: &mut Vec<Op>, depth: usize, histories: &mut u64) {
     if depth == 0 {
-        replay(path);
+        replay::<N>(path);
         *histories += 1;
         return;
     }
-    for symbol in 0..6_u8 {
-        let op = match symbol {
-            0 => Op::Claim(0),
-            1 => Op::Claim(1),
-            2 => Op::Resolve(0),
-            3 => Op::Resolve(1),
-            4 => Op::Release(0),
-            _ => Op::Release(1),
+    let symbols = (3 * N) as u8;
+    for symbol in 0..symbols {
+        let address = symbol % N as u8;
+        let op = match symbol / N as u8 {
+            0 => Op::Claim(address),
+            1 => Op::Resolve(address),
+            _ => Op::Release(address),
         };
         path.push(op);
-        explore(path, depth - 1, histories);
+        explore::<N>(path, depth - 1, histories);
         path.pop();
     }
+}
+
+fn explore_all<const N: usize>(max_depth: u32) -> u64 {
+    let mut path = Vec::new();
+    let mut histories = 0_u64;
+    for depth in 1..=max_depth {
+        explore::<N>(&mut path, depth as usize, &mut histories);
+    }
+    let expected: u64 = (1..=max_depth).map(|d| (3 * N as u64).pow(d)).sum();
+    assert_eq!(histories, expected, "exploration must visit every history");
+    histories
 }
 
 #[test]
@@ -109,13 +119,15 @@ fn explore(path: &mut Vec<Op>, depth: usize, histories: &mut u64) {
 // covers the same code paths at small scale in `miri_ownership.rs`.
 #[cfg_attr(miri, ignore = "exhaustive exploration is a native-speed workload")]
 fn exhaustive_two_address_histories_up_to_depth_7_match_model() {
-    let mut path = Vec::new();
-    let mut histories = 0_u64;
-    for depth in 1..=7 {
-        explore(&mut path, depth, &mut histories);
-    }
-    let expected: u64 = (1..=7).map(|d| 6_u64.pow(d)).sum();
-    assert_eq!(histories, expected, "exploration must visit every history");
+    assert_eq!(explore_all::<2>(7), 335_922);
+}
+
+#[test]
+// 3 addresses (two live owners at once — cross-registration interaction),
+// 9 symbols per position, depths 1..=6: 597,861 histories. Native-only.
+#[cfg_attr(miri, ignore = "exhaustive exploration is a native-speed workload")]
+fn exhaustive_three_address_histories_up_to_depth_6_match_model() {
+    assert_eq!(explore_all::<3>(6), 597_870);
 }
 
 #[test]

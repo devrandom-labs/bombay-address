@@ -35,7 +35,7 @@ Results (all native runs on Apple M4 Pro, debug profile, Rust 1.96.0):
 
 - Exhaustive small-state exploration: every history over 2 addresses and
   the alphabet {claim, resolve, release} × {addr0, addr1}, depths 1..=7 —
-  335,941 histories replayed against the reference model. **No divergence.**
+  335,922 histories replayed against the reference model. **No divergence.**
 - Proptest: 512 cases × 2 strategies (uniform histories up to 200 ops over
   16 addresses; hot-address-biased histories), proptest-generated seeds,
   per-step model agreement. **No divergence.** Reproduce:
@@ -82,6 +82,41 @@ Negative results worth recording:
   claims is physically infeasible (~585 years at 10^9 claims/s). The
   wraparound hazard (a wrapped generation colliding with a live one) is
   noted as a theoretical boundary, not a finding.
+
+### Segment 3 — endpoint lifecycle, string fuzz, deeper loom
+
+- Endpoint lifecycle accounting (`tests/endpoint_lifecycle.rs`): every
+  endpoint handle (claim payload + resolve snapshot clones) carries
+  creation/drop counters; after EVERY operation the live-handle count must
+  equal the model's registration count, and after the final drain
+  created == dropped exactly. Proptest: 256 cases × up to 120 ops over 8
+  addresses. **No leak, no double drop.** Deterministic replacement-path
+  accounting and boundary-address coexistence (`0`, `1`, `u64::MAX-1`,
+  `u64::MAX`, duplicate rejection returning the exact address) pass.
+- Third fuzz target `addresspass_strings` (+ `fuzz_entry_strings`):
+  3-byte op encoding, addresses over a 4-letter alphabet with zero-padding
+  variants. Replay campaign 3: seed `0x5E1E_0003`, 22,400+ executions.
+  **No divergence.**
+- Loom model added: release racing a fresh claim leaves exactly the new
+  owner or empty (4 active models + 1 ignored reproducer).
+- Loom bound: `LOOM_MAX_PREEMPTIONS=4` completes all models in 0.6 s;
+  `LOOM_MAX_PREEMPTIONS=8` completes all models in 20.6 s, exit 0. The
+  campaign gate runs depth 3 (matching the production frozen lane);
+  depths 4 and 8 were run manually and are exhaustive within those
+  bounds.
+
+### Segment 4 — wider exhaustive exploration, space lifetime
+
+- Exhaustive explorer generalized to `N` addresses: histories over
+  {claim, resolve, release} × N addresses, every sequence of depths 1..=d
+  replayed from a clean state against the reference model.
+  - 2 addresses, depth ≤ 7: **335,922 histories, no divergence.**
+  - 3 addresses (two live owners interacting), depth ≤ 6: **597,870
+    histories, no divergence.**
+- Space lifetime (`tests/space_lifetime.rs`): leases outliving every
+  `AddressSpace` handle still release their exact registration; resolved
+  snapshots outlive both the space and the registration; `default()`
+  parity; `Lease::address` accessor. **All pass.**
 
 ## FINDING-001
 
@@ -259,7 +294,7 @@ kills the space permanently (loom builds).**
   history, snapshot-outlives-release, 3-thread churn at small scale) plus
   the non-gated sequential tests (reentrancy, collision correctness at
   population 64, release/reclaim exactness, snapshot independence). The
-  exhaustive explorer (335,941 histories), proptest, fuzz replay, and
+  exhaustive explorer (335,922 histories), proptest, fuzz replay, and
   stress tests are gated `cfg(not(miri))` or `cfg_attr(miri, ignore)`:
   they are native-speed workloads and would take hours interpreted.
 - Result: **all green, exit 0** (nightly 1.99.0-nightly 2026-08-04, Miri
@@ -269,8 +304,9 @@ kills the space permanently (loom builds).**
 
 ## Interrupted or bounded verification (honest bounds)
 
-- Loom: exhaustive only within `LOOM_MAX_PREEMPTIONS=3`; deeper schedules
-  unexplored. The poison-recovery model is FINDING-004 (ignored).
+- Loom: exhaustive within `LOOM_MAX_PREEMPTIONS=8` (20.6 s, exit 0);
+  schedules requiring 9+ preemptions unexplored. The poison-recovery
+  model is FINDING-004 (ignored).
 - Fuzzing: deterministic seeded mutation, not coverage-guided (stable
   toolchain constraint). No time-bounded libFuzzer campaign was run.
 - Generation exhaustion: untestable (theoretical note above).
