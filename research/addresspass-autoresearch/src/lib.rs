@@ -1202,3 +1202,140 @@ pub fn fuzz_entry_isolation_cascade(data: &[u8]) {
         assert!(spaces[which].is_empty() && models[which].is_empty());
     }
 }
+
+/// Wide-key cascade variant of [`fuzz_entry`]: the chain mechanics of
+/// [`fuzz_entry_cascade`] driven through composite `(u64, u64)` keys —
+/// exercising the hasher's two-half chunked `write` path under
+/// nested-lease chain operations (the wide-key fuzz lane has no chains;
+/// the cascade lane has no composite keys).
+///
+/// Encoding: three bytes per operation. `op = b0 % 4` (build, cascade,
+/// resolve, len-check); `slot = (b0 / 4) % 4` selects one of four chain
+/// bases; `b1` gives the build depth (`1 + b1 % 8`); `b2` salts the
+/// composite key halves.
+pub fn fuzz_entry_wide_cascade(data: &[u8]) {
+    /// One chain link: value for identity, plus the next lease down.
+    struct Link {
+        value: u64,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<addresspass::Lease<(u64, u64), Link>>>,
+    }
+
+    impl Clone for Link {
+        fn clone(&self) -> Self {
+            // A resolved snapshot must not own the chain below it.
+            Self {
+                value: self.value,
+                next: None,
+            }
+        }
+    }
+
+    const MAX_DEPTH: u64 = 8;
+
+    /// Slot key: `(slot, offset)` salted by `selector`, spanning both
+    /// halves of the composite key.
+    fn key_for(slot: usize, offset: u64, selector: u8) -> (u64, u64) {
+        (
+            (slot as u64) * 1_000 + offset + u64::from(selector) % 32,
+            (slot as u64) * 1_000_000 + offset * 1_000 + u64::from(selector / 8) % 16,
+        )
+    }
+
+    let space = addresspass::AddressSpace::<(u64, u64), Link>::new();
+    let mut model: std::collections::BTreeMap<(u64, u64), u64> = Default::default();
+    type ChainSlot = Option<(addresspass::Lease<(u64, u64), Link>, Vec<(u64, u64)>)>;
+    let mut chains: [ChainSlot; 4] = [None, None, None, None];
+    for (step, triple) in data.chunks_exact(3).enumerate() {
+        let slot = usize::from(triple[0] / 4) % 4;
+        match triple[0] % 4 {
+            0 => {
+                let depth = 1 + u64::from(triple[1]) % MAX_DEPTH;
+                let mut next: Option<Box<addresspass::Lease<(u64, u64), Link>>> = None;
+                let mut claimed: Vec<(u64, u64)> = Vec::new();
+                let mut aborted = false;
+                for offset in (0..depth).rev() {
+                    let address = key_for(slot, offset, triple[2]);
+                    match space.claim(address, Link { value: offset, next: next.take() }) {
+                        Ok(lease) => {
+                            assert!(
+                                model.insert(address, offset).is_none(),
+                                "step {step}: SUT claimed an address the model owns"
+                            );
+                            claimed.push(address);
+                            next = Some(Box::new(lease));
+                        }
+                        Err(addresspass::AddressInUse(returned)) => {
+                            assert_eq!(returned, address, "step {step}");
+                            assert!(
+                                model.contains_key(&address),
+                                "step {step}: SUT rejected an address the model owns"
+                            );
+                            aborted = true;
+                            break;
+                        }
+                    }
+                }
+                if aborted {
+                    for address in claimed {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: partial cascade released an address the model did not own"
+                        );
+                    }
+                } else {
+                    let top = *next.expect("depth >= 1");
+                    // Replacing a live chain drops its top, cascading the
+                    // OLD chain (a different selector yields different
+                    // keys, so a rebuild can avoid the old range).
+                    // Mirror that release before storing the new chain
+                    // (Segment 23 lesson).
+                    if let Some((old_top, old_addresses)) = chains[slot].take() {
+                        drop(old_top);
+                        for address in old_addresses {
+                            assert!(
+                                model.remove(&address).is_some(),
+                                "step {step}: replaced chain released an address the model did not own"
+                            );
+                        }
+                    }
+                    chains[slot] = Some((top, claimed));
+                }
+            }
+            1 => {
+                if let Some((top, addresses)) = chains[slot].take() {
+                    top.release();
+                    for address in addresses {
+                        assert!(
+                            model.remove(&address).is_some(),
+                            "step {step}: cascade released an address the model did not own"
+                        );
+                    }
+                }
+            }
+            2 => {
+                let address = key_for(slot, u64::from(triple[1]) % MAX_DEPTH, triple[2]);
+                assert_eq!(
+                    space.resolve(&address).map(|l| l.value),
+                    model.get(&address).copied(),
+                    "step {step}: resolve({address:?}) diverged"
+                );
+            }
+            _ => {
+                assert_eq!(space.len(), model.len(), "step {step}: len diverged");
+            }
+        }
+    }
+    for slot in &mut chains {
+        if let Some((top, addresses)) = slot.take() {
+            top.release();
+            for address in addresses {
+                model.remove(&address);
+            }
+        }
+    }
+    assert!(space.is_empty() && model.is_empty());
+}

@@ -80,3 +80,9 @@ name = "addresspass_isolation_cascade"
 path = "fuzz_targets/addresspass_isolation_cascade.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_wide_cascade"
+path = "fuzz_targets/addresspass_wide_cascade.rs"
+test = false
+doc = false

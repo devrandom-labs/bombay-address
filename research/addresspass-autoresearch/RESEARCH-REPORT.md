@@ -438,6 +438,18 @@ validity.
   mechanics (the flat-endpoint boundary test never exercises chains).
   **Pass.**
 
+### Segment 27 — wide-key cascade fuzz target
+
+- `fuzz_entry_wide_cascade` (twelfth fuzz target
+  `addresspass_wide_cascade`, replay campaign 12, seed `0x41DE_CA5C`,
+  ~100,000 executions): the chain mechanics of `fuzz_entry_cascade`
+  driven through composite `(u64, u64)` keys — exercising the hasher's
+  two-half chunked `write` path under nested-lease chain operations (the
+  wide-key fuzz lane has no chains; the cascade lane has no composite
+  keys). The slot-overwrite cascade mirror (Segment 23 lesson) was built
+  in proactively — a different selector yields different keys, so a
+  rebuild can succeed and must cascade the old chain. **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
