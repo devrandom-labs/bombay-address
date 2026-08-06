@@ -527,6 +527,18 @@ validity.
   spawns). The model mirrors spawns on release AND on failed-claim
   endpoint drops (Segment 15 lesson). **No divergence.**
 
+### Segment 35 — isolation × reentrant fuzz target
+
+- `fuzz_entry_isolation_reentrant` (fourteenth fuzz target
+  `addresspass_isolation_reentrant`, replay campaign 14, seed
+  `0x1501_52E3`, ~100,000 executions): two independent address spaces,
+  each hosting spawn-on-drop endpoints, with operations routed by a bit —
+  no cross-space bleed under reentrant spawns. Each space is
+  model-checked separately at every step plus a cross-check that BOTH
+  stay in lockstep; spawns are mirrored on release AND on failed-claim
+  endpoint drops. The isolation entry has no spawns; the reentrant entry
+  has no second space. **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

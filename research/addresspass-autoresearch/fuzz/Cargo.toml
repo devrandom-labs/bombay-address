@@ -92,3 +92,9 @@ name = "addresspass_reentrant_colliding"
 path = "fuzz_targets/addresspass_reentrant_colliding.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_isolation_reentrant"
+path = "fuzz_targets/addresspass_isolation_reentrant.rs"
+test = false
+doc = false
