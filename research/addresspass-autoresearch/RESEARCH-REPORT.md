@@ -236,6 +236,14 @@ validity.
   level-by-level. Reproduce:
   `CASCADE_DEPTH=17000 cargo test --manifest-path research/addresspass-autoresearch/Cargo.toml --test drop_cascade_depth --release -- --ignored`
 
+### Segment 13 — cascade proptest
+
+- `tests/cascade_proptest.rs`: 1–4 independent nested chains (depth 1–63)
+  per case, random whole-chain cascades (only the top lease is reachable
+  through the public API, so cascades are whole-chain by construction)
+  and random resolves, model-checked per step; 256 cases. Pinpoint test:
+  top release cascades a whole 3-chain. **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
