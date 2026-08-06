@@ -59,6 +59,35 @@ fn release_drops_endpoint_which_releases_another_lease() {
     assert!(space.is_empty());
 }
 
+/// A FAILED build that attached a held lease drops the rejected endpoint
+/// (outside the write guard), which releases the held lease: the attached
+/// registration must be gone even though the build itself failed.
+#[test]
+fn failed_build_releases_its_attached_lease() {
+    let space = Arc::new(AddressSpace::<u64, Box<LeaseHolder>>::new());
+    // The build target (address 1) is already taken.
+    let blocker = space.claim(1_u64, Box::new(LeaseHolder { inner: None })).unwrap();
+    // The lease this build tries to attach (address 2).
+    let attached = space.claim(2_u64, Box::new(LeaseHolder { inner: None })).unwrap();
+    assert_eq!(space.len(), 2);
+
+    // Build at 1 holding the lease of 2: collides on 1.
+    let rejected = space.claim(
+        1_u64,
+        Box::new(LeaseHolder {
+            inner: Some(attached),
+        }),
+    );
+    assert!(rejected.is_err(), "build at an owned address must fail");
+    // The rejected endpoint's drop released 2; 1 remains the blocker's.
+    assert!(space.resolve(&2).is_none(), "attached lease must be released");
+    assert!(space.resolve(&1).is_some(), "blocker must survive");
+    assert_eq!(space.len(), 1);
+
+    blocker.release();
+    assert!(space.is_empty());
+}
+
 /// An endpoint whose `Drop` CLAIMS a new registration in the same space.
 struct ClaimOnDrop {
     space: Arc<AddressSpace<u64, Box<ClaimOnDrop>>>,

@@ -56,3 +56,9 @@ name = "addresspass_reentrant"
 path = "fuzz_targets/addresspass_reentrant.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_release_graph"
+path = "fuzz_targets/addresspass_release_graph.rs"
+test = false
+doc = false

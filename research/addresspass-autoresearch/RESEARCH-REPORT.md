@@ -283,6 +283,27 @@ validity.
   parks the lease — 99 becomes live and resolvable, and the space drains
   exactly. **Pass.**
 
+### Segment 16 — release-graph fuzz target
+
+- `fuzz_entry_release_graph` (eighth fuzz target `addresspass_release_graph`,
+  replay campaign 8, seed `0x6A4A_1EED`, ~100,000 executions): each
+  endpoint may hold the lease of ANOTHER live address (a `LeaseHolder`
+  shape), so releasing a top-level lease cascades through a tree of
+  endpoint drops at ARBITRARY addresses — not the contiguous chains of
+  `fuzz_entry_cascade`. The model tracks each address's held target and
+  mirrors both cascade paths: a release walks the held chain; a build
+  that attaches a held lease and then collides drops the rejected
+  endpoint, releasing the attached lease. **No divergence** (the
+  failed-build path was modeled from the start, applying the Segment 15
+  lesson). Resolve also pins that a snapshot clone never holds a lease —
+  if the SUT leaked a held lease into a snapshot, the len check would
+  desync.
+- Deterministic pinpoint (`tests/nested_reentrancy.rs`,
+  `failed_build_releases_its_attached_lease`): a build at an owned
+  address that attached the lease of address 2 is rejected; the rejected
+  endpoint's drop releases 2, the blocker at 1 survives, and the space
+  drains exactly. **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

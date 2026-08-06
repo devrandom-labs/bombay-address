@@ -675,3 +675,117 @@ pub fn fuzz_entry_reentrant(data: &[u8]) {
     }
     assert!(space.is_empty() && model.is_empty());
 }
+
+/// Release-graph variant of [`fuzz_entry`]: each endpoint may hold the
+/// lease of ANOTHER live address (a `LeaseHolder` shape), so releasing a
+/// top-level lease cascades through a tree of endpoint drops at ARBITRARY
+/// addresses — not the contiguous chains of [`fuzz_entry_cascade`]. A
+/// build that attaches a held lease and then collides drops the rejected
+/// endpoint, which releases its held lease: the model mirrors both
+/// cascade paths.
+///
+/// Encoding: two bytes per operation. `op = b0 % 4` selects build (0),
+/// release (1), resolve (2), or len-check (3); `address = (b0 / 4) % 16`;
+/// `b1` selects the held-lease target (`(b1 / 2) % 16`, attached when
+/// `b1 % 2 == 1` and the target lease is held by the entry) and salts the
+/// endpoint value.
+pub fn fuzz_entry_release_graph(data: &[u8]) {
+    /// An endpoint that may hold the lease of another address; dropping
+    /// it releases that lease (and cascades through the held tree).
+    struct Holder {
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (held-lease release), never read"
+        )]
+        held: Option<Box<addresspass::Lease<u64, Holder>>>,
+    }
+
+    impl Clone for Holder {
+        fn clone(&self) -> Self {
+            // Resolved snapshots never hold a lease (one-shot).
+            Self { held: None }
+        }
+    }
+
+    let space = addresspass::AddressSpace::<u64, Holder>::new();
+    // Model: address -> (endpoint value, held target). `held` is what the
+    // endpoint at that address will release when it is dropped.
+    let mut model: std::collections::BTreeMap<u64, (u64, Option<u64>)> = Default::default();
+    // Leases the entry holds directly (top-level handles). An address in
+    // the model but NOT here is held inside another endpoint.
+    let mut handles: std::collections::BTreeMap<u64, addresspass::Lease<u64, Holder>> =
+        Default::default();
+
+    /// Mirror a SUT release: remove `address`, then walk the held chain —
+    /// each held lease is the only handle to its registration, so the
+    /// drop always releases it.
+    fn cascade_release(model: &mut std::collections::BTreeMap<u64, (u64, Option<u64>)>, start: u64) {
+        let mut address = Some(start);
+        while let Some(a) = address {
+            let (_, held) = model
+                .remove(&a)
+                .expect("cascade: released an address the model does not own");
+            address = held;
+        }
+    }
+
+    for (step, pair) in data.chunks_exact(2).enumerate() {
+        let address = u64::from(pair[0] / 4) % 16;
+        let held_hint = u64::from(pair[1] / 2) % 16;
+        match pair[0] % 4 {
+            0 => {
+                let want_hold = pair[1] % 2 == 1;
+                let attach = want_hold && held_hint != address && handles.contains_key(&held_hint);
+                let held = if attach { handles.remove(&held_hint) } else { None };
+                match space.claim(address, Holder { held: held.map(Box::new) }) {
+                    Ok(lease) => {
+                        assert!(
+                            model.insert(address, (address, attach.then_some(held_hint))).is_none(),
+                            "step {step}: SUT claimed an address the model owns"
+                        );
+                        handles.insert(address, lease);
+                    }
+                    Err(addresspass::AddressInUse(returned)) => {
+                        assert_eq!(returned, address, "step {step}");
+                        assert!(
+                            model.contains_key(&address),
+                            "step {step}: SUT rejected an address the model owns"
+                        );
+                        if attach {
+                            // The rejected endpoint (holding the taken
+                            // lease) was dropped by `claim`: the held
+                            // registration is released with it.
+                            cascade_release(&mut model, held_hint);
+                        }
+                    }
+                }
+            }
+            1 => {
+                if let Some(lease) = handles.remove(&address) {
+                    drop(lease);
+                    cascade_release(&mut model, address);
+                }
+            }
+            2 => {
+                // Endpoint values are the address itself; a resolved
+                // snapshot is a Clone with `held: None`, so dropping it
+                // must never release a registration — if the SUT leaked
+                // the held lease into a snapshot, the len check would
+                // desync and fail below.
+                assert_eq!(
+                    space.resolve(&address).map(|_| address),
+                    model.get(&address).map(|(value, _)| *value),
+                    "step {step}: resolve({address}) diverged"
+                );
+            }
+            _ => {
+                assert_eq!(space.len(), model.len(), "step {step}: len diverged");
+            }
+        }
+    }
+    for (address, lease) in handles {
+        drop(lease);
+        cascade_release(&mut model, address);
+    }
+    assert!(space.is_empty() && model.is_empty());
+}
