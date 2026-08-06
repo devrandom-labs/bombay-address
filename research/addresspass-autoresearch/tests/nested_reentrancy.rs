@@ -223,3 +223,117 @@ fn failed_claim_runs_endpoint_drop_which_parks_spawn() {
     }
     assert!(space.is_empty());
 }
+
+/// A chain whose links BOTH cascade (each endpoint owns the next lease
+/// down) AND spawn a new registration on drop: releasing the top
+/// cascades through every link, and each link's `Drop` claims its own
+/// persistent spawn. Combines the cascade and reentrant-spawn surfaces
+/// in one deterministic shape.
+#[test]
+fn cascade_links_spawn_persistent_registrations_on_drop() {
+    use parking_lot::Mutex;
+
+    let space = Arc::new(AddressSpace::<u64, Box<ChainSpawn>>::new());
+    type Bag = Arc<Mutex<Vec<addresspass::Lease<u64, Box<ChainSpawn>>>>>;
+    let park: Bag = Arc::new(Mutex::new(Vec::new()));
+
+    struct ChainSpawn {
+        value: u64,
+        space: Arc<AddressSpace<u64, Box<ChainSpawn>>>,
+        park: Bag,
+        #[expect(
+            dead_code,
+            reason = "the field is exercised through drop (cascade recursion), never read"
+        )]
+        next: Option<Box<addresspass::Lease<u64, Box<ChainSpawn>>>>,
+        spawn: Option<u64>,
+    }
+    impl Clone for ChainSpawn {
+        fn clone(&self) -> Self {
+            ChainSpawn {
+                value: self.value,
+                space: Arc::clone(&self.space),
+                park: Arc::clone(&self.park),
+                next: None, // resolved snapshots never cascade
+                spawn: None, // ... and never spawn
+            }
+        }
+    }
+    impl Drop for ChainSpawn {
+        fn drop(&mut self) {
+            // Spawn a persistent registration (may fail if taken).
+            if let Some(spawn) = self.spawn {
+                let spawned = ChainSpawn {
+                    value: self.value * 10,
+                    space: Arc::clone(&self.space),
+                    park: Arc::clone(&self.park),
+                    next: None,
+                    spawn: None,
+                };
+                if let Ok(lease) = self.space.claim(spawn, Box::new(spawned)) {
+                    self.park.lock().push(lease);
+                }
+            }
+            // The `next` lease drops here, cascading the chain below.
+        }
+    }
+
+    // Chain: address 1 owns 2, 2 owns 3. Each link spawns its own
+    // persistent registration on drop (11, 22, 33).
+    let third = space
+        .claim(
+            3_u64,
+            Box::new(ChainSpawn {
+                value: 3,
+                space: Arc::clone(&space),
+                park: Arc::clone(&park),
+                next: None,
+                spawn: Some(33),
+            }),
+        )
+        .unwrap();
+    let second = space
+        .claim(
+            2_u64,
+            Box::new(ChainSpawn {
+                value: 2,
+                space: Arc::clone(&space),
+                park: Arc::clone(&park),
+                next: Some(Box::new(third)),
+                spawn: Some(22),
+            }),
+        )
+        .unwrap();
+    let first = space
+        .claim(
+            1_u64,
+            Box::new(ChainSpawn {
+                value: 1,
+                space: Arc::clone(&space),
+                park: Arc::clone(&park),
+                next: Some(Box::new(second)),
+                spawn: Some(11),
+            }),
+        )
+        .unwrap();
+    assert_eq!(space.len(), 3);
+
+    // Release the top: cascades 1 → 2 → 3, each link spawning its own
+    // registration on drop. Total after: 3 spawned registrations.
+    first.release();
+    assert!(space.resolve(&1).is_none());
+    assert!(space.resolve(&2).is_none());
+    assert!(space.resolve(&3).is_none());
+    assert_eq!(space.len(), 3, "three spawns from the cascade");
+    for spawn in [11_u64, 22, 33] {
+        assert!(space.resolve(&spawn).is_some(), "spawn {spawn} missing");
+    }
+
+    // Drain the parked spawns exactly.
+    let parked: Vec<_> = park.lock().drain(..).collect();
+    assert_eq!(parked.len(), 3);
+    for lease in parked {
+        lease.release();
+    }
+    assert!(space.is_empty());
+}

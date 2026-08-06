@@ -505,6 +505,17 @@ validity.
   Green under `nix develop .#miri --command cargo miri test` (all 4
   miri_ownership tests pass) AND natively.
 
+### Segment 33 — cascade × reentrant-spawn combination
+
+- `tests/nested_reentrancy.rs` gained
+  `cascade_links_spawn_persistent_registrations_on_drop`: a 3-link chain
+  whose links BOTH cascade (each endpoint owns the next lease down) AND
+  spawn a new persistent registration on drop (11, 22, 33). Releasing
+  the top cascades through every link; each link's `Drop` claims its own
+  spawn. The cascade lane has no spawns; the reentrant-spawn lane has no
+  chains; the combination was untested. **Pass** natively AND under Miri
+  (all 5 nested_reentrancy tests green).
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
