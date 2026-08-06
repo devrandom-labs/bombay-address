@@ -539,6 +539,16 @@ validity.
   endpoint drops. The isolation entry has no spawns; the reentrant entry
   has no second space. **No divergence.**
 
+### Segment 36 — wide × reentrant fuzz target
+
+- `fuzz_entry_wide_reentrant` (fifteenth fuzz target
+  `addresspass_wide_reentrant`, replay campaign 15, seed `0x41DE_52E3`,
+  ~100,000 executions): 64 addresses with spawn-on-drop endpoints —
+  maximizing simultaneously live registrations under reentrant spawns
+  (the wide lane has no spawns; the reentrant lane has 16 addresses).
+  Spawns mirrored on release AND on failed-claim endpoint drops.
+  **No divergence.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
