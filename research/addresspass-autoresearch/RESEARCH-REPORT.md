@@ -118,6 +118,30 @@ Negative results worth recording:
   snapshots outlive both the space and the registration; `default()`
   parity; `Lease::address` accessor. **All pass.**
 
+### Segment 5 — composable linearizability, wide fuzz
+
+- Linearizability lane extended to scripted multi-address workloads
+  (`tests/linearizability.rs`): per-thread scripts are fixed; the
+  scheduler picks the interleaving; per-address timed logs are checked
+  independently (locality: Herlihy & Wing, TOPLAS 1990). Deterministic
+  cases: 4 threads × 5 rounds on one hot address (60 timed ops);
+  6 threads × 4 rounds over 3 addresses. Proptest: 64 cases of random
+  scripts (2–5 threads × up to 10 ops over 3 addresses). **Every recorded
+  history is linearizable.** The checker is re-validated per file against
+  fabricated illegal histories.
+- Fourth fuzz target `addresspass_wide` (+ `fuzz_entry_wide`): 1-byte op
+  encoding over 64 addresses (maximizes live-registration fan-out).
+  Replay campaign 4: seed `0x41DE_0004`, 22,400+ executions.
+  **No divergence.**
+- Observation (recorded, not a finding): `OpenTable::remove_if` performs
+  two independent lookups (`get` for the generation check, then
+  `remove_entry`). With contract-abiding keys this is exact; a key whose
+  `Hash` is stateful (violating the `Hash`/`Eq` consistency contract)
+  could make `remove_entry` miss after the `get` hit, and `release`
+  ignores the returned `Option` — the lease would report success while
+  the entry leaks. Reachable only through caller contract violation, so
+  it is documented here rather than filed.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

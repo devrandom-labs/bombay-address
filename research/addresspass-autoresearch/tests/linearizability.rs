@@ -1,15 +1,20 @@
 //! Linearizability checking of real concurrent histories.
 //!
-//! Threads execute a fixed, barrier-synchronized workload on ONE hot
-//! address while recording each operation's kind, value, result, and
-//! start/finish indices from a global sequence counter. A backtracking
-//! checker then decides whether some sequential ordering of the recorded
-//! operations (respecting real-time order: op A finishes before op B
-//! starts) produces exactly the recorded results under the documented
-//! semantics.
+//! Threads execute scripted, barrier-synchronized workloads while
+//! recording each operation's kind, value, result, and start/finish
+//! indices from a global sequence counter. A backtracking checker then
+//! decides whether some sequential ordering of the recorded operations
+//! (respecting real-time order) produces exactly the recorded results
+//! under the documented semantics.
 //!
-//! The checker is validated against a fabricated illegal history so the
-//! test suite can actually fail (a checker that accepts everything is
+//! Multi-address histories are checked PER ADDRESS: linearizability is a
+//! local property (Herlihy & Wing, *Linearizability: A Correctness
+//! Condition for Concurrent Objects*, TOPLAS 1990 — a history is
+//! linearizable iff every object's subhistory is), and each address pass
+//! registration is an independent object.
+//!
+//! The checker is validated against fabricated illegal histories so the
+//! suite can actually fail (a checker that accepts everything is
 //! worthless).
 #![cfg(not(miri))]
 
@@ -18,6 +23,7 @@ use std::sync::{Arc, Barrier};
 
 use addresspass::AddressSpace;
 use parking_lot::Mutex;
+use proptest::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpKind {
@@ -35,7 +41,7 @@ struct Timed {
     finish: u64,
 }
 
-/// Sequential single-address state for the checker. `owner` is the live
+/// Sequential single-address state for the checker: the live
 /// registration's endpoint value, if any.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct State {
@@ -85,14 +91,10 @@ fn is_linearizable(ops: &[Timed]) -> bool {
             if done & (1 << i) != 0 {
                 return false;
             }
-            // Real-time order: op i cannot be linearized before any
-            // already-completed op that it overlaps... the standard rule:
-            // op i may go next iff every op that FINISHED before i STARTED
-            // is already done.
+            // Op i may be linearized next iff every op that FINISHED
+            // before i STARTED (strict real-time precedence) is done.
             let precedence_ok = (0..ops.len()).all(|j| {
-                j == i
-                    || done & (1 << j) != 0
-                    || ops[j].finish > ops[i].start
+                j == i || done & (1 << j) != 0 || ops[j].finish > ops[i].start
             });
             precedence_ok
                 && state
@@ -106,64 +108,101 @@ fn is_linearizable(ops: &[Timed]) -> bool {
     search(ops, 0, State { owner: None }, &mut memo)
 }
 
-/// Execute the real concurrent workload: 4 threads × 5 rounds on one
-/// address, recording timed operations.
-fn record_history() -> Vec<Timed> {
-    const THREADS: usize = 4;
-    const ROUNDS: u64 = 5;
+/// One scripted operation for the concurrent workloads. Scripts fix each
+/// thread's op sequence; the interleaving is left to the scheduler.
+#[derive(Debug, Clone, Copy)]
+enum ScriptOp {
+    Claim(u8),
+    Resolve(u8),
+    /// Release the oldest lease this thread still holds, if any.
+    ReleaseOwned,
+}
 
+/// Run one thread per script against a shared space, all released onto
+/// the workload by one barrier. Returns per-address timed logs.
+fn run_scripted(scripts: &[Vec<ScriptOp>]) -> Vec<Vec<Timed>> {
+    const MAX_ADDRESSES: usize = 8;
     let space = Arc::new(AddressSpace::<u64, u64>::new());
     let clock = Arc::new(AtomicU64::new(1));
-    let log = Arc::new(Mutex::new(Vec::new()));
-    let barrier = Arc::new(Barrier::new(THREADS));
+    let logs: Arc<Vec<Mutex<Vec<Timed>>>> =
+        Arc::new((0..MAX_ADDRESSES).map(|_| Mutex::new(Vec::new())).collect());
+    let barrier = Arc::new(Barrier::new(scripts.len()));
 
-    let handles: Vec<_> = (0..THREADS as u64)
-        .map(|thread| {
+    let handles: Vec<_> = scripts
+        .iter()
+        .enumerate()
+        .map(|(thread, script)| {
             let space = Arc::clone(&space);
             let clock = Arc::clone(&clock);
-            let log = Arc::clone(&log);
+            let logs = Arc::clone(&logs);
             let barrier = Arc::clone(&barrier);
+            let script = script.clone();
             std::thread::spawn(move || {
+                let mut owned: Vec<(u64, addresspass::Lease<u64, u64>)> = Vec::new();
                 barrier.wait();
-                for round in 0..ROUNDS {
-                    let endpoint = thread * 100 + round + 1;
-                    let start = clock.fetch_add(1, Ordering::SeqCst);
-                    let outcome = space.claim(0, endpoint);
-                    match outcome {
-                        Ok(lease) => {
-                            let finish = clock.fetch_add(1, Ordering::SeqCst);
-                            log.lock().push(Timed {
-                                kind: OpKind::ClaimOk(endpoint),
-                                start,
-                                finish,
-                            });
-                            // Resolve while we own the address.
+                for (round, op) in script.iter().enumerate() {
+                    match *op {
+                        ScriptOp::Claim(address) => {
+                            let address = u64::from(address) % MAX_ADDRESSES as u64;
+                            // Unique endpoint per (thread, round).
+                            let endpoint = (thread * 1_000 + round + 1) as u64;
                             let start = clock.fetch_add(1, Ordering::SeqCst);
-                            let resolved = space.resolve(&0);
+                            let outcome = space.claim(address, endpoint);
+                            let finish = clock.fetch_add(1, Ordering::SeqCst);
+                            match outcome {
+                                Ok(lease) => {
+                                    logs[address as usize].lock().push(Timed {
+                                        kind: OpKind::ClaimOk(endpoint),
+                                        start,
+                                        finish,
+                                    });
+                                    owned.push((endpoint, lease));
+                                }
+                                Err(_) => logs[address as usize].lock().push(Timed {
+                                    kind: OpKind::ClaimRejected,
+                                    start,
+                                    finish,
+                                }),
+                            }
+                        }
+                        ScriptOp::Resolve(address) => {
+                            let address = u64::from(address) % MAX_ADDRESSES as u64;
+                            let start = clock.fetch_add(1, Ordering::SeqCst);
+                            let resolved = space.resolve(&address);
                             let finish = clock.fetch_add(1, Ordering::SeqCst);
                             let kind = match resolved {
                                 Some(v) => OpKind::ResolveHit(v),
                                 None => OpKind::ResolveMiss,
                             };
-                            log.lock().push(Timed { kind, start, finish });
-                            let start = clock.fetch_add(1, Ordering::SeqCst);
-                            lease.release();
-                            let finish = clock.fetch_add(1, Ordering::SeqCst);
-                            log.lock().push(Timed {
-                                kind: OpKind::Release(endpoint),
-                                start,
-                                finish,
-                            });
+                            logs[address as usize].lock().push(Timed { kind, start, finish });
                         }
-                        Err(_) => {
-                            let finish = clock.fetch_add(1, Ordering::SeqCst);
-                            log.lock().push(Timed {
-                                kind: OpKind::ClaimRejected,
-                                start,
-                                finish,
-                            });
+                        ScriptOp::ReleaseOwned => {
+                            if !owned.is_empty() {
+                                let (endpoint, lease) = owned.remove(0);
+                                let address = *lease.address();
+                                let start = clock.fetch_add(1, Ordering::SeqCst);
+                                lease.release();
+                                let finish = clock.fetch_add(1, Ordering::SeqCst);
+                                logs[address as usize].lock().push(Timed {
+                                    kind: OpKind::Release(endpoint),
+                                    start,
+                                    finish,
+                                });
+                            }
                         }
                     }
+                }
+                // Drain this thread's leases inside the timed region.
+                for (endpoint, lease) in owned {
+                    let address = *lease.address();
+                    let start = clock.fetch_add(1, Ordering::SeqCst);
+                    lease.release();
+                    let finish = clock.fetch_add(1, Ordering::SeqCst);
+                    logs[address as usize].lock().push(Timed {
+                        kind: OpKind::Release(endpoint),
+                        start,
+                        finish,
+                    });
                 }
             })
         })
@@ -172,24 +211,95 @@ fn record_history() -> Vec<Timed> {
         handle.join().unwrap();
     }
     assert!(space.is_empty());
-    log.lock().clone()
+    let mut result = Vec::new();
+    for log in logs.iter() {
+        let mut log = log.lock().clone();
+        log.sort_by_key(|op| (op.start, op.finish));
+        result.push(log);
+    }
+    result
+}
+
+fn check_all_addresses(logs: &[Vec<Timed>]) {
+    for (address, log) in logs.iter().enumerate() {
+        if log.is_empty() {
+            continue;
+        }
+        assert!(
+            is_linearizable(log),
+            "address {address}: recorded history has no legal sequential \
+             ordering:\n{log:#?}"
+        );
+    }
 }
 
 #[test]
-fn recorded_concurrent_history_is_linearizable() {
-    let mut history = record_history();
-    assert!(!history.is_empty());
-    assert!(history.len() < 64, "{} ops recorded", history.len());
-    // Deterministic order for the checker (recording order is irrelevant
-    // to the verdict, but fix it for reproducibility).
-    history.sort_by_key(|op| (op.start, op.finish));
-    assert!(
-        is_linearizable(&history),
-        "recorded history has no legal sequential ordering:\n{history:#?}"
-    );
+fn hot_address_history_is_linearizable() {
+    // 4 threads × 5 rounds on ONE address (fixed scripts for
+    // determinism of the workload; the interleaving is the scheduler's).
+    let scripts: Vec<Vec<ScriptOp>> = (0..4)
+        .map(|_| {
+            (0..5)
+                .flat_map(|_| [ScriptOp::Claim(0), ScriptOp::Resolve(0), ScriptOp::ReleaseOwned])
+                .collect()
+        })
+        .collect();
+    let logs = run_scripted(&scripts);
+    assert!(logs[0].len() < 64, "{} ops recorded", logs[0].len());
+    check_all_addresses(&logs);
 }
 
-/// The checker must REJECT illegal histories — otherwise the test above
+#[test]
+fn three_address_history_is_linearizable_per_address() {
+    // 6 threads over 3 addresses with mixed op patterns.
+    let scripts: Vec<Vec<ScriptOp>> = (0..6)
+        .map(|thread| {
+            (0..4)
+                .flat_map(|round| {
+                    let address = ((thread + round) % 3) as u8;
+                    [
+                        ScriptOp::Claim(address),
+                        ScriptOp::Resolve((address + 1) % 3),
+                        ScriptOp::ReleaseOwned,
+                        ScriptOp::Resolve(address),
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+    let logs = run_scripted(&scripts);
+    check_all_addresses(&logs);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 64,
+        ..ProptestConfig::default()
+    })]
+
+    /// Randomized concurrent linearizability: proptest fixes the scripts,
+    /// the scheduler picks the interleaving; every recorded per-address
+    /// history must be linearizable.
+    #[test]
+    fn random_scripts_are_linearizable(
+        scripts in prop::collection::vec(
+            prop::collection::vec(
+                prop_oneof![
+                    3 => (0u8..3).prop_map(ScriptOp::Claim),
+                    4 => (0u8..3).prop_map(ScriptOp::Resolve),
+                    2 => Just(ScriptOp::ReleaseOwned),
+                ],
+                1..10
+            ),
+            2..5
+        )
+    ) {
+        let logs = run_scripted(&scripts);
+        check_all_addresses(&logs);
+    }
+}
+
+/// The checker must REJECT illegal histories — otherwise the tests above
 /// could never fail. Each fabricated history violates exactly one rule.
 #[test]
 fn checker_rejects_illegal_histories() {

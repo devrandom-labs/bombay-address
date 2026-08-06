@@ -275,3 +275,56 @@ pub fn fuzz_entry_strings(data: &[u8]) {
     }
     assert!(space.is_empty());
 }
+
+/// Wide-address variant of [`fuzz_entry`]: 1-byte operations over 64
+/// addresses, maximizing the number of simultaneously live registrations
+/// the fuzzer can reach.
+///
+/// Encoding: one byte per operation. `op = b % 4` (claim, release,
+/// resolve, len-check); `address = (b / 4) % 64`; claimed endpoints are a
+/// running counter (unique, non-zero).
+pub fn fuzz_entry_wide(data: &[u8]) {
+    let space = addresspass::AddressSpace::<u64, u64>::new();
+    let mut model = ReferenceModel::new();
+    let mut leases: std::collections::BTreeMap<u64, (u64, addresspass::Lease<u64, u64>)> =
+        Default::default();
+    let mut endpoint = 0_u64;
+    for (step, &byte) in data.iter().enumerate() {
+        let address = u64::from(byte / 4) % 64;
+        match byte % 4 {
+            0 => {
+                endpoint += 1;
+                match space.claim(address, endpoint) {
+                    Ok(lease) => {
+                        let generation = model
+                            .claim(address, endpoint)
+                            .unwrap_or_else(|| panic!("step {step}: SUT claimed owned"));
+                        leases.insert(address, (generation, lease));
+                    }
+                    Err(addresspass::AddressInUse(returned)) => {
+                        assert_eq!(returned, address, "step {step}");
+                        assert!(model.claim(address, endpoint).is_none(), "step {step}");
+                    }
+                }
+            }
+            1 => {
+                if let Some((generation, lease)) = leases.remove(&address) {
+                    model.release(address, generation);
+                    drop(lease);
+                }
+            }
+            2 => {
+                assert_eq!(space.resolve(&address), model.resolve(address), "step {step}");
+            }
+            3 => {
+                assert_eq!(space.len(), model.len(), "step {step}");
+            }
+            _ => unreachable!(),
+        }
+    }
+    for (address, (generation, lease)) in leases {
+        model.release(address, generation);
+        drop(lease);
+    }
+    assert!(space.is_empty());
+}

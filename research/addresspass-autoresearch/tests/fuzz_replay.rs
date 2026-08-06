@@ -15,7 +15,7 @@
 #![cfg(not(miri))]
 
 use addresspass_autoresearch::{
-    XorShift64Star, fuzz_entry, fuzz_entry_colliding, fuzz_entry_strings,
+    XorShift64Star, fuzz_entry, fuzz_entry_colliding, fuzz_entry_strings, fuzz_entry_wide,
 };
 
 /// Hand-written seeds: structured histories exercising claim/release/
@@ -104,5 +104,12 @@ fn fuzz_replay_colliding_histories_never_diverge() {
 fn fuzz_replay_string_histories_never_diverge() {
     // Seed fixed for reproducibility: 0x5E1E_0003 (campaign 3).
     let runs = campaign(fuzz_entry_strings, 0x5E1E_0003, 20_000);
+    assert!(runs >= 20_000, "only {runs} executions");
+}
+
+#[test]
+fn fuzz_replay_wide_histories_never_diverge() {
+    // Seed fixed for reproducibility: 0x41DE_0004 (campaign 4).
+    let runs = campaign(fuzz_entry_wide, 0x41DE_0004, 20_000);
     assert!(runs >= 20_000, "only {runs} executions");
 }
