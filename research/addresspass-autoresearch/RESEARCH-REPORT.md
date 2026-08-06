@@ -263,6 +263,26 @@ validity.
   mid-build abort cascade — previously only reachable implicitly, now
   fuzzed and pinned.
 
+### Segment 15 — reentrant-drop fuzz target + failed-claim spawn path
+
+- `fuzz_entry_reentrant` (seventh fuzz target `addresspass_reentrant`,
+  replay campaign 7, seed `0x52E3_37A4`, ~100,000 executions): an
+  endpoint whose `Drop` CLAIMS a new registration in the same space and
+  parks the spawned lease in a shared bag (the spawned registration
+  PERSISTS until drained). Production drops removed endpoints outside the
+  write guard; this fuzzes that guarantee with random claim/release/
+  resolve histories. The model tracks each endpoint's spawn address and
+  mirrors spawns on release AND on failed claims (the rejected endpoint is
+  dropped by `claim` outside the guard, so its `Drop` may spawn too).
+  **No divergence.** A first model draft missed the failed-claim spawn
+  and diverged at step 92 (len 14 vs 13) — a model bug, fixed; the SUT
+  stayed consistent, which is the campaign's finding-quality signal.
+- Deterministic pinpoint (`tests/nested_reentrancy.rs`,
+  `failed_claim_runs_endpoint_drop_which_parks_spawn`): a duplicate claim
+  is rejected, but the rejected endpoint's `Drop` claims address 99 and
+  parks the lease — 99 becomes live and resolvable, and the space drains
+  exactly. **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

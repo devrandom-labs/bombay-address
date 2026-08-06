@@ -519,3 +519,159 @@ pub fn fuzz_entry_cascade(data: &[u8]) {
     }
     assert!(space.is_empty() && model.is_empty());
 }
+
+/// Reentrant-`Drop` variant of [`fuzz_entry`]: an endpoint whose `Drop`
+/// claims a NEW registration in the same space and parks the spawned
+/// lease in a shared bag (the spawned registration PERSISTS until the bag
+/// is drained). Production drops removed endpoints outside the write
+/// guard; this entry fuzzes that guarantee — the drop-time claim must not
+/// deadlock, must not corrupt the table, and must leave the model exact.
+///
+/// Encoding: two bytes per operation. `op = b0 % 4` selects claim (0),
+/// release (1), resolve (2), or len-check (3); `address = (b0 / 4) % 16`;
+/// `b1` selects the spawn behavior (`b1 % 4 == 0` → no spawn, otherwise
+/// spawn at `(b1 / 4) % 16`) and salts the endpoint value.
+pub fn fuzz_entry_reentrant(data: &[u8]) {
+    use std::sync::{Arc, Mutex};
+
+    type Space = addresspass::AddressSpace<u64, Box<Reentrant>>;
+    type Bag = Arc<Mutex<Vec<addresspass::Lease<u64, Box<Reentrant>>>>>;
+
+    /// An endpoint whose `Drop` claims a new registration at `spawn`
+    /// (one-shot: the spawned endpoint never spawns again).
+    struct Reentrant {
+        space: Arc<Space>,
+        bag: Bag,
+        value: u64,
+        spawn: Option<u64>,
+    }
+
+    impl Clone for Reentrant {
+        fn clone(&self) -> Self {
+            // Resolved snapshots are inert: a clone never spawns.
+            Self {
+                space: Arc::clone(&self.space),
+                bag: Arc::clone(&self.bag),
+                value: self.value,
+                spawn: None,
+            }
+        }
+    }
+
+    impl Drop for Reentrant {
+        fn drop(&mut self) {
+            // Runs after the write guard is released (documented design).
+            // The nested claim may fail (address taken) — legal, mirror
+            // it as a no-op. The spawned lease is parked so the spawned
+            // registration persists; the entry drains the bag at the end.
+            if let Some(spawn) = self.spawn {
+                let spawned = Reentrant {
+                    space: Arc::clone(&self.space),
+                    bag: Arc::clone(&self.bag),
+                    value: self.value,
+                    spawn: None,
+                };
+                if let Ok(lease) = self.space.claim(spawn, Box::new(spawned)) {
+                    self.bag.lock().expect("reentrant bag lock").push(lease);
+                }
+            }
+        }
+    }
+
+    let space: Arc<Space> = Arc::new(addresspass::AddressSpace::new());
+    let bag: Bag = Arc::new(Mutex::new(Vec::new()));
+
+    // Model: address -> (value, spawn). The spawn column is what the
+    // endpoint at that address will do on release.
+    let mut model: std::collections::BTreeMap<u64, (u64, Option<u64>)> = Default::default();
+    let mut leases: [Option<addresspass::Lease<u64, Box<Reentrant>>>; 16] =
+        [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None];
+    for (step, pair) in data.chunks_exact(2).enumerate() {
+        let address = u64::from(pair[0] / 4) % 16;
+        match pair[0] % 4 {
+            0 => {
+                let value = u64::from(pair[1]) + 1;
+                let spawn = if pair[1] % 4 == 0 {
+                    None
+                } else {
+                    Some(u64::from(pair[1] / 4) % 16)
+                };
+                match space.claim(
+                    address,
+                    Box::new(Reentrant {
+                        space: Arc::clone(&space),
+                        bag: Arc::clone(&bag),
+                        value,
+                        spawn,
+                    }),
+                ) {
+                    Ok(lease) => {
+                        assert!(
+                            model.insert(address, (value, spawn)).is_none(),
+                            "step {step}: SUT claimed an address the model owns"
+                        );
+                        leases[address as usize] = Some(lease);
+                    }
+                    Err(addresspass::AddressInUse(returned)) => {
+                        assert_eq!(returned, address, "step {step}");
+                        assert!(
+                            model.contains_key(&address),
+                            "step {step}: SUT rejected an address the model owns"
+                        );
+                        // The rejected endpoint is dropped by `claim`
+                        // (outside the write guard); its `Drop` may spawn
+                        // a new registration. Mirror it.
+                        if let Some(spawn_address) = spawn {
+                            model.entry(spawn_address).or_insert((value, None));
+                        }
+                    }
+                }
+            }
+            1 => {
+                if let Some(lease) = leases[address as usize].take() {
+                    let (value, spawn) = model
+                        .remove(&address)
+                        .expect("step {step}: SUT released an address the model does not own");
+                    drop(lease);
+                    // The drop claimed `spawn` (if any) with the SAME value
+                    // and parked the spawned lease. Mirror it.
+                    if let Some(spawn_address) = spawn {
+                        model.entry(spawn_address).or_insert((value, None));
+                    }
+                }
+            }
+            2 => {
+                assert_eq!(
+                    space.resolve(&address).map(|l| l.value),
+                    model.get(&address).map(|(value, _)| *value),
+                    "step {step}: resolve({address}) diverged"
+                );
+            }
+            _ => {
+                assert_eq!(space.len(), model.len(), "step {step}: len diverged");
+            }
+        }
+    }
+    // Drain: release every live slot, then every spawned registration.
+    for (index, slot) in leases.iter_mut().enumerate() {
+        if let Some(lease) = slot.take() {
+            let (value, spawn) = model
+                .remove(&(index as u64))
+                .expect("drain: slot address missing from model");
+            drop(lease);
+            if let Some(spawn_address) = spawn {
+                model.entry(spawn_address).or_insert((value, None));
+            }
+        }
+    }
+    let spawned: Vec<_> = bag.lock().expect("reentrant bag lock").drain(..).collect();
+    for lease in spawned {
+        let (_, spawn) = model
+            .remove(lease.address())
+            .expect("drain: spawned address missing from model");
+        // Spawned endpoints never spawn (one-shot), so `spawn` is None.
+        assert!(spawn.is_none(), "drain: spawned endpoint had a spawn");
+        drop(lease);
+    }
+    assert!(space.is_empty() && model.is_empty());
+}

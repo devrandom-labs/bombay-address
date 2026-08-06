@@ -50,3 +50,9 @@ name = "addresspass_cascade"
 path = "fuzz_targets/addresspass_cascade.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_reentrant"
+path = "fuzz_targets/addresspass_reentrant.rs"
+test = false
+doc = false

@@ -114,3 +114,83 @@ fn release_drops_endpoint_which_claims_and_releases() {
     probe.unwrap().release();
     assert!(space.is_empty());
 }
+
+/// An endpoint whose `Drop` CLAIMS a new registration in the same space
+/// and PARKS the spawned lease (the spawned registration persists). The
+/// claim may fail if the address is taken — the drop must tolerate that.
+type ParkBag = Arc<std::sync::Mutex<Vec<Lease<u64, Box<ParkOnDrop>>>>>;
+struct ParkOnDrop {
+    space: Arc<AddressSpace<u64, Box<ParkOnDrop>>>,
+    park: ParkBag,
+    spawn_address: Option<u64>,
+}
+
+impl Clone for ParkOnDrop {
+    fn clone(&self) -> Self {
+        Self {
+            space: Arc::clone(&self.space),
+            park: Arc::clone(&self.park),
+            spawn_address: None, // resolved snapshots never spawn
+        }
+    }
+}
+
+impl Drop for ParkOnDrop {
+    fn drop(&mut self) {
+        if let Some(spawn) = self.spawn_address {
+            let spawned = ParkOnDrop {
+                space: Arc::clone(&self.space),
+                park: Arc::clone(&self.park),
+                spawn_address: None,
+            };
+            if let Ok(lease) = self.space.claim(spawn, Box::new(spawned)) {
+                self.park.lock().unwrap().push(lease);
+            }
+        }
+    }
+}
+
+/// A FAILED claim still runs the rejected endpoint's `Drop` (production
+/// drops it outside the write guard); if that `Drop` claims a new
+/// registration, the spawn persists and must be resolvable.
+#[test]
+fn failed_claim_runs_endpoint_drop_which_parks_spawn() {
+    let space = Arc::new(AddressSpace::<u64, Box<ParkOnDrop>>::new());
+    let park = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    let first = space
+        .claim(
+            1_u64,
+            Box::new(ParkOnDrop {
+                space: Arc::clone(&space),
+                park: Arc::clone(&park),
+                spawn_address: Some(99),
+            }),
+        )
+        .unwrap();
+    assert_eq!(space.len(), 1);
+
+    // Second claim of address 1 is rejected; the rejected endpoint's Drop
+    // claims 99 and parks the lease — so 99 becomes live.
+    let rejected = space.claim(
+        1_u64,
+        Box::new(ParkOnDrop {
+            space: Arc::clone(&space),
+            park: Arc::clone(&park),
+            spawn_address: Some(99),
+        }),
+    );
+    assert!(rejected.is_err(), "duplicate claim must be rejected");
+    assert_eq!(space.len(), 2, "rejected endpoint's drop must spawn 99");
+    assert!(space.resolve(&99).is_some(), "spawned 99 must be live");
+
+    // Drain: release 1 (its endpoint's drop tries to spawn 99 again — now
+    // taken, tolerated), then the parked 99.
+    first.release();
+    let parked: Vec<_> = park.lock().unwrap().drain(..).collect();
+    assert_eq!(parked.len(), 1);
+    for lease in parked {
+        lease.release();
+    }
+    assert!(space.is_empty());
+}
