@@ -292,6 +292,7 @@ fn nested_release_racing_resolve_stays_consistent() {
 
         struct Holds {
             value: u64,
+            #[expect(dead_code, reason = "exercised through drop, never read")]
             inner: Option<Box<addresspass::Lease<u64, Holds>>>,
         }
         impl Clone for Holds {
@@ -426,6 +427,7 @@ fn concurrent_multi_tree_cascades_do_not_bleed() {
 
         struct Holds {
             value: u64,
+            #[expect(dead_code, reason = "exercised through drop, never read")]
             inner: Option<Box<addresspass::Lease<u64, Holds>>>,
         }
         impl Clone for Holds {
