@@ -1,41 +1,41 @@
-# addresspass
+# Bombay Address
 
-A generic, allocation-conscious concurrent address space for actorpass. It
-maps pure address values to typed endpoints while preserving exclusive,
-generation-safe ownership.
+`bombay-address` is a typed concurrent address space with exclusive,
+generation-safe ownership. The published package is `bombay-address`; its Rust
+library name is `address`.
+
+```toml
+[dependencies]
+bombay-address = "0.1"
+```
 
 ```rust
-use addresspass::AddressSpace;
+use bombay_address::AddressSpace;
 
 let space = AddressSpace::new();
-let lease = space.claim(7_u64, "endpoint")?;
-assert_eq!(space.resolve(&7), Some("endpoint"));
+let lease = space.claim("worker-7", "mailbox")?;
+
+assert_eq!(space.resolve(&"worker-7"), Some("mailbox"));
 drop(lease);
-assert_eq!(space.resolve(&7), None);
-# Ok::<(), addresspass::AddressInUse<u64>>(())
+assert_eq!(space.resolve(&"worker-7"), None);
+# Ok::<(), bombay_address::AddressInUse<&str>>(())
 ```
 
-The initial implementation is intentionally a safe `RwLock<HashMap>` baseline.
-It is a semantic reference and measurement baseline, not a claim of optimality.
+The `Lease` is the authority to release one exact registration generation.
+Dropping an old lease cannot remove a newer owner. Resolved endpoints are typed
+snapshots, and user `Clone`/`Drop` code runs outside the table lock.
 
-## Required semantics
-
-- At most one live registration owns an address.
-- `resolve` is linearizable with claim and release.
-- Releasing an old generation cannot remove a newer generation.
-- Endpoint values remain typed; addresspass performs no message erasure.
-- No lock is held while caller code uses a resolved endpoint.
-- Dropping a lease releases its exact registration.
-
-## Research lanes
+## Verification
 
 ```bash
-cargo test --workspace
-RUSTFLAGS="--cfg loom" cargo test -p addresspass --test loom --release
-cargo bench -p addresspass
-cargo run -p addresspass-perf --release
-nix develop .#miri --command cargo miri test -p addresspass
+nix flake check -L
+nix build .#coverage -L
 ```
 
-The `/autoresearch` contract lives in `.auto/prompt.md`. Correctness gates and
-the score are intentionally separate.
+The bounded models, property tests, stress tests, fuzz targets, replay corpus,
+and findings record live under `research/address-tests/`.
+
+See the [guide](https://docs.page/devrandom-labs/bombay-address) and
+[API reference](https://docs.rs/bombay-address).
+
+Licensed under Apache-2.0 or MIT, at your option.

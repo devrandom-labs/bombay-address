@@ -1,0 +1,17 @@
+---
+title: Using leases
+description: Claim, resolve, release, and reclaim address-space storage.
+---
+
+# Using leases
+
+`claim(address, endpoint)` succeeds only when no live registration owns that
+address. `resolve(&address)` clones a typed endpoint snapshot. Consume the lease
+with `release()`, or simply drop it, to remove that exact generation.
+
+Keep the lease with the component that owns the endpoint lifetime. Do not treat
+an address as authority: it designates a destination; the lease proves local
+ownership of the registration.
+
+After a large churn burst, call `shrink_to_fit()` at an application-chosen quiet
+point to reclaim excess table capacity without changing live registrations.

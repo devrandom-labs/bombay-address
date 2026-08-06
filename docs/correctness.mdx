@@ -1,0 +1,15 @@
+---
+title: Correctness
+description: Ownership guarantees and the adversarial verification suite.
+---
+
+# Correctness
+
+The address space guarantees at most one live owner per address, linearizable
+claim/resolve/release operations, and generation-safe release. Endpoint clone
+and drop callbacks execute outside the table lock.
+
+The retained `research/address-tests/` workspace contains reference-model
+property tests, bounded Loom models, deterministic stress, allocation-retention
+checks, Miri ownership checks, fuzz targets, and replay corpora. See its
+`VERIFICATION.md` for commands, bounds, and historical findings.

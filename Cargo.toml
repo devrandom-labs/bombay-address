@@ -1,15 +1,16 @@
 [workspace]
 resolver = "3"
-members = ["crates/addresspass", "crates/addresspass-perf"]
+members = ["crates/address", "crates/address-perf"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.96"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/devrandom-labs/addresspass"
+repository = "https://github.com/devrandom-labs/bombay-address"
+homepage = "https://github.com/devrandom-labs/bombay-address"
 
 [workspace.dependencies]
-addresspass = { path = "crates/addresspass" }
+bombay-address = { path = "crates/address" }
 criterion = "0.8"
 loom = "0.7"
 parking_lot = "0.12"
@@ -17,4 +18,3 @@ parking_lot = "0.12"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
-

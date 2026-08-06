@@ -3,19 +3,10 @@
 version = 4
 
 [[package]]
-name = "addresspass"
+name = "address-perf"
 version = "0.1.0"
 dependencies = [
- "criterion",
- "loom",
- "parking_lot",
-]
-
-[[package]]
-name = "addresspass-perf"
-version = "0.1.0"
-dependencies = [
- "addresspass",
+ "bombay-address",
 ]
 
 [[package]]
@@ -59,6 +50,15 @@ name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+
+[[package]]
+name = "bombay-address"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "loom",
+ "parking_lot",
+]
 
 [[package]]
 name = "bumpalo"

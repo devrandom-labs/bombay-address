@@ -1,0 +1,15 @@
+{
+  "name": "Bombay Address",
+  "description": "Typed, generation-safe address ownership for Rust.",
+  "sidebar": [
+    {
+      "group": "Guide",
+      "pages": [
+        { "title": "Introduction", "href": "/", "icon": "location-dot" },
+        { "title": "Using leases", "href": "/leases", "icon": "key" },
+        { "title": "Correctness", "href": "/correctness", "icon": "shield-halved" },
+        { "title": "API docs", "href": "https://docs.rs/bombay-address", "icon": "rust" }
+      ]
+    }
+  ]
+}

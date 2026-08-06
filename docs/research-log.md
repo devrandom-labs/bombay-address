@@ -38,8 +38,8 @@ Key facts established from sources:
 
 ## Harness and workload
 
-`autoresearch.sh` delegates to the frozen `.auto/measure.sh`:
-`addresspass-perf` claims 65,536 `u64` addresses, then 5M resolves of
+`verification.sh` delegates to the frozen `the benchmark harness`:
+`address-perf` claims 65,536 `u64` addresses, then 5M resolves of
 `operation % 65_536` (dense sequential keys, all hits), single-threaded.
 `SCORE` = resolve ops/sec (best of 5). Frozen: tests, benches, perf binary,
 `checks.sh` (fmt + tests + clippy `-D warnings` + loom 3-preemption + frozen
@@ -152,12 +152,12 @@ workload (hot addresses resolved repeatedly); costs ~0.7ns/op here.
 The atomic-slot seqlock already loses single-threaded; an unsafe variant
 (plain loads under seq discipline) would shave the atomic cost but is
 formally UB for generic non-atomic payloads (Rust memory model has no
-benign races) and violates AGENTS.md's unsafe bar without a clear win:
+benign races) and violates the project safety policy's unsafe bar without a clear win:
 the atomic-slot version of the same pattern measured worse than the lock.
 
 ## Real-workload measurements (beyond the harness)
 
-### Latency under concurrent mutation (addresspass + scratch stress)
+### Latency under concurrent mutation (bombay-address + scratch stress)
 
 Writer churning 4,096 addresses at a realistic rate (1 mutation per ~100µs,
 ~10K/s vs ~16M resolves/s): reader p50 = 10ns, p99 = 10ns, p99.9 = 100ns.
@@ -199,7 +199,7 @@ IDENTICAL to `HashMap::get` with fx (the internal re-hash overlaps the
 probe's memory latency); locked 5.22ns — identical to the current 5.17.
 No dependency added; hypothesis falsified by measurement.
 
-### 1M-population validation (prompt's "millions" question)
+### 1M-population validation (plan's "millions" question)
 
 Winning design at 1,000,000 live addresses (scratch, counting allocator):
 - resolve: 19.1ns/op (52.4M ops/s) — DRAM-latency-bound: the map is
@@ -221,9 +221,9 @@ Winning design at 1,000,000 live addresses (scratch, counting allocator):
 - Multi-reader cliff reproduced with the real crate (scaling bench):
   159.9M single-threaded → 13.9M at 8 threads.
 
-## Full research-solution audit (prompt's candidate list, every item)
+## Full research-solution audit (plan's candidate list, every item)
 
-A reviewer asked whether every research direction from `.auto/prompt.md` had
+A reviewer asked whether every research direction from `the verification plan` had
 been checked. The audit below closes the gaps that were previously cited as
 sources but never measured. All measurements: Apple M4 Pro, release,
 scratch benches in /tmp/addrbench.
@@ -243,7 +243,7 @@ Single-threaded cost grows monotonically with shard count:
 per-read lock RMW persists, diluted not eliminated. Confirmed: sharding is
 not a fix; random hash routing gives no locality.
 
-### Two-level radix over the hash (prompt's first question) — REJECTED
+### Two-level radix over the hash (plan's first question) — REJECTED
 
 Unprotected (read-only) 2^16-node × 16-slot radix with splitmix indexing:
 **3.93ns/op (254M) single-threaded, 2,084M at 8 threads** — the fastest
@@ -334,14 +334,14 @@ constraint — was rejected because the review established the contract.
 
 ### Loom coverage expansion
 
-New `crates/addresspass/tests/loom_model.rs` (the frozen `tests/loom.rs`
+New `crates/address/tests/loom_model.rs` (the frozen `tests/loom.rs`
 cannot be edited): concurrent duplicate claims (exactly one winner,
 loser gets `AddressInUse` with the contested address), release racing
 resolve (no torn reads), and replacement release+reclaim (never exposes a
 stale or torn endpoint). All 3 new models + the frozen partial-publication
 model pass at `LOOM_MAX_PREEMPTIONS=3`.
 
-Known gate limitation: the frozen `.auto/checks.sh` invokes only
+Known gate limitation: the Nix verification gate invokes only
 `--test loom`, so `loom_model.rs` does not run in the gate; it is executed
 explicitly (command in the file header). Fixing the gate would require
 editing the frozen checks.sh.
@@ -424,7 +424,7 @@ for the generic+reentrancy-safe contract and belong to the actorpass layer
 
 - TL version-stamped resolve cache for hot-address workloads (real
   workload only; costs ~0.7ns/op on the harness's anti-locality walk).
-- Specialized `u64`-key path (seqlock/atomic slots) if addresspass ever
+- Specialized `u64`-key path (seqlock/atomic slots) if bombay-address ever
   gains a key-shape specialization; measured ceiling 1.9ns/op.
 - At 1M population the design is DRAM-bound (19ns); a population-aware
   capacity hint (`with_capacity`) or a compact two-level layout are the

@@ -1,0 +1,27 @@
+---
+title: Bombay Address
+description: Typed, generation-safe address ownership for Rust.
+---
+
+# Bombay Address
+
+Bombay Address maps application-defined address values to typed endpoints. A
+successful claim returns a `Lease`; that lease exclusively owns one registration
+generation and releases it on drop.
+
+```rust
+use bombay_address::AddressSpace;
+
+let routes = AddressSpace::new();
+let lease = routes.claim("jobs/thumbnail", "mailbox-1")?;
+assert_eq!(routes.resolve(&"jobs/thumbnail"), Some("mailbox-1"));
+drop(lease);
+# Ok::<(), bombay_address::AddressInUse<&str>>(())
+```
+
+Use it when a runtime needs local address ownership without a registry,
+discovery protocol, messaging framework, or erased endpoint type.
+
+- [Using leases](/leases)
+- [Correctness and verification](/correctness)
+- [API reference](https://docs.rs/bombay-address)

@@ -1,0 +1,106 @@
+[package]
+name = "address-tests-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Detached workspace: the repository root manifest is immutable.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+address-tests = { path = ".." }
+bombay-address = { path = "../../../crates/address" }
+
+[[bin]]
+name = "address_ops"
+path = "fuzz_targets/address_ops.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_colliding"
+path = "fuzz_targets/address_colliding.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_strings"
+path = "fuzz_targets/address_strings.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_wide"
+path = "fuzz_targets/address_wide.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_isolation"
+path = "fuzz_targets/address_isolation.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_cascade"
+path = "fuzz_targets/address_cascade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_reentrant"
+path = "fuzz_targets/address_reentrant.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_release_graph"
+path = "fuzz_targets/address_release_graph.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_colliding_cascade"
+path = "fuzz_targets/address_colliding_cascade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_string_cascade"
+path = "fuzz_targets/address_string_cascade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_isolation_cascade"
+path = "fuzz_targets/address_isolation_cascade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_wide_cascade"
+path = "fuzz_targets/address_wide_cascade.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_reentrant_colliding"
+path = "fuzz_targets/address_reentrant_colliding.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_isolation_reentrant"
+path = "fuzz_targets/address_isolation_reentrant.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "address_wide_reentrant"
+path = "fuzz_targets/address_wide_reentrant.rs"
+test = false
+doc = false
