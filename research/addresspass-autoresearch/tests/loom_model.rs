@@ -205,3 +205,44 @@ fn release_racing_claim_leaves_exact_new_owner_or_empty() {
         }
     });
 }
+
+/// Two addresses, three threads: claimant on A, releaser+reclaimer on B,
+/// reader alternating between both. Every read of either address must be
+/// absent or the exact live endpoint of that address — no cross-address
+/// bleed under interleaving.
+#[test]
+fn two_address_three_thread_interleaving_has_no_cross_bleed() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+        let lease_a = space.claim(1_u64, 100_u64).unwrap();
+        let lease_b = space.claim(2_u64, 200_u64).unwrap();
+
+        let holder_a = thread::spawn(move || {
+            assert_eq!(*lease_a.address(), 1);
+            drop(lease_a);
+        });
+        let swapper_b = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                drop(lease_b);
+                let fresh = space.claim(2_u64, 300_u64).expect("freed above");
+                drop(fresh);
+            })
+        };
+        let reader = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || {
+                if let Some(v) = space.resolve(&1) {
+                    assert_eq!(v, 100, "address 1 bled: {v}");
+                }
+                if let Some(v) = space.resolve(&2) {
+                    assert!(v == 200 || v == 300, "address 2 bled: {v}");
+                }
+            })
+        };
+        holder_a.join().unwrap();
+        swapper_b.join().unwrap();
+        reader.join().unwrap();
+        assert!(space.is_empty());
+    });
+}

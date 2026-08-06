@@ -142,6 +142,22 @@ Negative results worth recording:
   the entry leaks. Reachable only through caller contract violation, so
   it is documented here rather than filed.
 
+### Segment 6 — snapshot validity, space isolation
+
+- Snapshot validity (`tests/snapshot_validity.rs`): every resolve
+  snapshot collected during a random history (256 proptest cases × up to
+  100 ops over 6 addresses) is held until the space is fully drained and
+  must remain intact; deterministic pinpoint shows a pre-release snapshot
+  keeps the OLD value while a post-replacement snapshot holds the NEW
+  one. **Pass.**
+- Space isolation: deterministic test (same address claimed in two
+  spaces; peer release does not interfere) plus a fifth fuzz target
+  `addresspass_isolation` routing ops between two spaces, checking BOTH
+  spaces against independent models at every resolve step. Replay
+  campaign 5: seed `0x1501_A7E5`, 22,400+ executions. **No divergence.**
+- Loom model added: two-address/three-thread interleaving has no
+  cross-address bleed (6 active models + 1 ignored reproducer).
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

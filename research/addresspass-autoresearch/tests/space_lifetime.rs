@@ -76,3 +76,19 @@ fn lease_address_accessor_returns_the_owned_address() {
     assert_eq!(lease.address(), &42);
     lease.release();
 }
+
+#[test]
+fn independent_spaces_share_no_state() {
+    let first = AddressSpace::new();
+    let second = AddressSpace::new();
+    let lease_a = first.claim(1_u64, 10_u64).unwrap();
+    let lease_b = second.claim(1_u64, 20_u64).unwrap(); // same address: independent
+    assert_eq!(first.resolve(&1), Some(10));
+    assert_eq!(second.resolve(&1), Some(20));
+    lease_a.release();
+    assert_eq!(first.resolve(&1), None);
+    assert_eq!(second.resolve(&1), Some(20)); // untouched by peer release
+    assert_eq!(second.len(), 1);
+    lease_b.release();
+    assert!(first.is_empty() && second.is_empty());
+}

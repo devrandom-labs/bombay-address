@@ -38,3 +38,9 @@ name = "addresspass_wide"
 path = "fuzz_targets/addresspass_wide.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_isolation"
+path = "fuzz_targets/addresspass_isolation.rs"
+test = false
+doc = false

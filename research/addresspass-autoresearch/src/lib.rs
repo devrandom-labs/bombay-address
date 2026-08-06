@@ -328,3 +328,69 @@ pub fn fuzz_entry_wide(data: &[u8]) {
     }
     assert!(space.is_empty());
 }
+
+/// Lease table used by the fuzz entries: address → (generation, lease).
+pub type LeaseTable = std::collections::BTreeMap<u64, (u64, addresspass::Lease<u64, u64>)>;
+
+/// Two-space isolation variant: operations are routed by the top bit to
+/// one of two independent address spaces; each must behave as if the
+/// other did not exist (no shared state between instances).
+///
+/// Encoding: two bytes per operation. `space = b0 >> 7`; `op = (b0 >> 5)
+/// % 3` (claim, release, resolve); `address = (b0 & 0x1f) % 8`; `b1`
+/// salts claimed endpoints.
+pub fn fuzz_entry_isolation(data: &[u8]) {
+    let spaces = [
+        addresspass::AddressSpace::<u64, u64>::new(),
+        addresspass::AddressSpace::<u64, u64>::new(),
+    ];
+    let mut models = [ReferenceModel::new(), ReferenceModel::new()];
+    let mut leases: [LeaseTable; 2] = [Default::default(), Default::default()];
+    let mut endpoint = 0_u64;
+    for (step, pair) in data.chunks_exact(2).enumerate() {
+        let which = usize::from(pair[0] >> 7);
+        let address = u64::from(pair[0] & 0x1f) % 8;
+        match (pair[0] >> 5) % 3 {
+            0 => {
+                endpoint += 1;
+                match spaces[which].claim(address, endpoint) {
+                    Ok(lease) => {
+                        let generation = models[which]
+                            .claim(address, endpoint)
+                            .unwrap_or_else(|| panic!("step {step}: SUT claimed owned"));
+                        leases[which].insert(address, (generation, lease));
+                    }
+                    Err(addresspass::AddressInUse(returned)) => {
+                        assert_eq!(returned, address, "step {step}");
+                        assert!(models[which].claim(address, endpoint).is_none(), "step {step}");
+                    }
+                }
+            }
+            1 => {
+                if let Some((generation, lease)) = leases[which].remove(&address) {
+                    models[which].release(address, generation);
+                    drop(lease);
+                }
+            }
+            _ => {
+                // Check BOTH spaces: the unrouted one must be unaffected
+                // by everything routed to its peer.
+                for (side, (space, model)) in spaces.iter().zip(models.iter()).enumerate() {
+                    assert_eq!(
+                        space.resolve(&address),
+                        model.resolve(address),
+                        "step {step}: space {side} diverged"
+                    );
+                    assert_eq!(space.len(), model.len(), "step {step}: space {side}");
+                }
+            }
+        }
+    }
+    for (which, leases) in leases.into_iter().enumerate() {
+        for (address, (generation, lease)) in leases {
+            models[which].release(address, generation);
+            drop(lease);
+        }
+    }
+    assert!(spaces[0].is_empty() && spaces[1].is_empty());
+}
