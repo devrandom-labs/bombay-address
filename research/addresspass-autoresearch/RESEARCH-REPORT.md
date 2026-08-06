@@ -372,6 +372,17 @@ validity.
   keys builds, resolves a chain-internal colliding address exactly, and
   cascades to empty with nothing leaked. **Pass.**
 
+### Segment 22 — cascade lifecycle accounting
+
+- `tests/cascade_lifecycle.rs` (256 cases, up to 80 ops): chain links are
+  COUNTED endpoints; whole-chain cascades drop N links recursively
+  through endpoint `Drop`s, and mid-build abort cascades release partial
+  chains through the rejected endpoint. Live-handle count must equal the
+  model's registration count at every step, and created == dropped at
+  drain. The flat-endpoint lifecycle lane never exercises the recursive
+  cascade drop path; the cascade lane never accounts endpoints. **No
+  leak, no double drop.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
