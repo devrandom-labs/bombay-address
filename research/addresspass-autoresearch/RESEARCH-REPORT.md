@@ -428,6 +428,16 @@ validity.
   regression (the model's slot overwrite must mirror the old chain's
   release). **Pass.**
 
+### Segment 26 — boundary-address cascade pinpoint
+
+- `tests/cascade_proptest.rs` gained
+  `boundary_addresses_cascade_exactly`: a 4-link nested lease chain at
+  the extreme u64 domain (`u64::MAX-3 ..= u64::MAX`) builds, resolves
+  every chain-internal link exactly, and cascades to empty with nothing
+  leaked — the hasher's full-width-word boundary behavior under chain
+  mechanics (the flat-endpoint boundary test never exercises chains).
+  **Pass.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

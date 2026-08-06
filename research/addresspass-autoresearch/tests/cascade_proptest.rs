@@ -243,3 +243,43 @@ fn colliding_keys_cascade_exactly() {
         assert!(space.resolve(&Colliding(offset)).is_none(), "{offset} leaked");
     }
 }
+
+/// Deterministic pinpoint: a nested lease chain at the extreme u64
+/// boundary addresses (`u64::MAX-3 ..= u64::MAX`) builds, resolves
+/// chain-internal links, and cascades exactly — the hasher's boundary
+/// behavior (full-width words) under chain mechanics.
+#[test]
+fn boundary_addresses_cascade_exactly() {
+    let space = AddressSpace::<u64, Link>::new();
+    let base = u64::MAX - 3;
+    let mut next: Option<Box<Lease<u64, Link>>> = None;
+    let mut owned = Vec::new();
+    for offset in (0..4).rev() {
+        let address = base + offset;
+        let lease = space
+            .claim(
+                address,
+                Link {
+                    value: address,
+                    next: next.take(),
+                },
+            )
+            .unwrap();
+        owned.push(address);
+        next = Some(Box::new(lease));
+    }
+    assert_eq!(space.len(), 4);
+    for &address in &owned {
+        assert_eq!(
+            space.resolve(&address).map(|l| l.value),
+            Some(address),
+            "boundary chain link {address} lost"
+        );
+    }
+    let top = *next.unwrap();
+    top.release();
+    assert!(space.is_empty());
+    for &address in &owned {
+        assert!(space.resolve(&address).is_none(), "{address} leaked");
+    }
+}
