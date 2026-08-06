@@ -119,6 +119,12 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
         );
     }
 
+    /// Reclaim excess backing-table capacity without disturbing any live
+    /// registration, endpoint, or generation.
+    pub(crate) fn shrink_to_fit(&mut self) {
+        self.entries.shrink_to_fit();
+    }
+
     /// Remove the registration for `address` only when its generation
     /// matches `generation`. This is the generation safety gate: a stale
     /// lease can never remove a newer registration for the same address.
