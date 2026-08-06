@@ -26,3 +26,9 @@ name = "addresspass_colliding"
 path = "fuzz_targets/addresspass_colliding.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "addresspass_strings"
+path = "fuzz_targets/addresspass_strings.rs"
+test = false
+doc = false

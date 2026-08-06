@@ -173,3 +173,35 @@ fn poisoned_write_lock_recovers_and_stays_consistent() {
         assert!(space.is_empty());
     });
 }
+
+/// A release racing a fresh claim of the same address: the claim may fail
+/// (linearized before the release) or succeed (after it) — but afterwards
+/// the space must contain exactly the new registration or be empty, never
+/// the old endpoint, never both.
+#[test]
+fn release_racing_claim_leaves_exact_new_owner_or_empty() {
+    loom::model(|| {
+        let space = Arc::new(AddressSpace::new());
+        let old = space.claim(0_u64, 10_u64).unwrap();
+
+        let releaser = thread::spawn(move || drop(old));
+        let claimant = {
+            let space = Arc::clone(&space);
+            thread::spawn(move || space.claim(0_u64, 20_u64))
+        };
+        releaser.join().unwrap();
+        let outcome = claimant.join().unwrap();
+
+        match outcome {
+            Ok(lease) => {
+                assert_eq!(space.resolve(&0), Some(20));
+                drop(lease);
+                assert!(space.is_empty());
+            }
+            Err(_) => {
+                assert_eq!(space.resolve(&0), None);
+                assert!(space.is_empty());
+            }
+        }
+    });
+}

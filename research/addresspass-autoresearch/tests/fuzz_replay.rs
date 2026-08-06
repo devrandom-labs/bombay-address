@@ -14,7 +14,9 @@
 //! Excluded from Miri (execution counts are tuned for native speed).
 #![cfg(not(miri))]
 
-use addresspass_autoresearch::{XorShift64Star, fuzz_entry, fuzz_entry_colliding};
+use addresspass_autoresearch::{
+    XorShift64Star, fuzz_entry, fuzz_entry_colliding, fuzz_entry_strings,
+};
 
 /// Hand-written seeds: structured histories exercising claim/release/
 /// resolve overlap, boundary addresses (0 and 15), and empty input.
@@ -95,5 +97,12 @@ fn fuzz_replay_ops_histories_never_diverge() {
 fn fuzz_replay_colliding_histories_never_diverge() {
     // Seed fixed for reproducibility: 0xC011_1D1E (campaign 2).
     let runs = campaign(fuzz_entry_colliding, 0xC011_1D1E, 20_000);
+    assert!(runs >= 20_000, "only {runs} executions");
+}
+
+#[test]
+fn fuzz_replay_string_histories_never_diverge() {
+    // Seed fixed for reproducibility: 0x5E1E_0003 (campaign 3).
+    let runs = campaign(fuzz_entry_strings, 0x5E1E_0003, 20_000);
     assert!(runs >= 20_000, "only {runs} executions");
 }

@@ -210,3 +210,68 @@ pub fn fuzz_entry_colliding(data: &[u8]) {
     }
     assert!(space.is_empty());
 }
+
+/// String-address variant of [`fuzz_entry`]: decodes operations whose
+/// addresses are short strings over a 4-letter alphabet with zero-padding
+/// variants, exercising the custom hasher's chunked `write` path.
+///
+/// Encoding: three bytes per operation. `op = b0 % 4` (claim, release,
+/// resolve, len-check); the address is derived from `b1` (length 0..8) and
+/// `b2` (alphabet selector plus zero-pad flag).
+pub fn fuzz_entry_strings(data: &[u8]) {
+    let space = addresspass::AddressSpace::<String, u64>::new();
+    let mut model: std::collections::BTreeMap<String, u64> = Default::default();
+    let mut leases: std::collections::BTreeMap<String, addresspass::Lease<String, u64>> =
+        Default::default();
+    let mut endpoint = 0_u64;
+    for (step, triple) in data.chunks_exact(3).enumerate() {
+        let length = usize::from(triple[1] % 8);
+        let mut address = String::new();
+        for i in 0..length {
+            let letter = b"ab\0\xff"[usize::from(triple[2].wrapping_add(i as u8)) % 4];
+            address.push(letter as char);
+        }
+        if triple[2] % 2 == 1 {
+            address.push('\0'); // zero-pad extension: hasher collision case
+        }
+        match triple[0] % 4 {
+            0 => {
+                endpoint += 1;
+                match space.claim(address.clone(), endpoint) {
+                    Ok(lease) => {
+                        assert!(
+                            model.insert(address.clone(), endpoint).is_none(),
+                            "step {step}: SUT claimed an owned address"
+                        );
+                        leases.insert(address, lease);
+                    }
+                    Err(addresspass::AddressInUse(returned)) => {
+                        assert_eq!(returned, address, "step {step}");
+                        assert!(model.contains_key(&address), "step {step}");
+                    }
+                }
+            }
+            1 => {
+                if let Some(lease) = leases.remove(&address) {
+                    lease.release();
+                    model.remove(&address);
+                }
+            }
+            2 => {
+                assert_eq!(
+                    space.resolve(&address),
+                    model.get(&address).copied(),
+                    "step {step}"
+                );
+            }
+            3 => {
+                assert_eq!(space.len(), model.len(), "step {step}");
+            }
+            _ => unreachable!(),
+        }
+    }
+    for (_, lease) in leases {
+        lease.release();
+    }
+    assert!(space.is_empty());
+}
