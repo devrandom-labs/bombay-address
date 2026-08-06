@@ -489,9 +489,21 @@ validity.
   rounds of claim/resolve/release on ONE hot address — the ownership
   handoff between threads exercises the release→reclaim race the checker
   must order (hot-address log capped at 54 ops, within the 63-op bitmask
-  bound). The linearizability lane previously only had per-thread
+  bitmask bound). The linearizability lane previously only had per-thread
   self-owned-release scripts; cross-thread replacement churn was
   untested as a targeted history. **Linearizable.**
+
+### Segment 32 — Miri reentrant-spawn test
+
+- `tests/miri_ownership.rs` gained
+  `miri_reentrant_spawn_claims_persistent_registration`: a reentrant
+  endpoint whose `Drop` CLAIMS a new registration in the same space and
+  parks it (the Segment 15 shape, deterministic and small so the Miri
+  interpreter stays tractable). Two releasing endpoints race their spawn
+  claims of address 2; exactly one wins, and the parked winner's
+  ownership is Miri-tracked (heap box) for leaks and use-after-free.
+  Green under `nix develop .#miri --command cargo miri test` (all 4
+  miri_ownership tests pass) AND natively.
 
 ## FINDING-001
 
