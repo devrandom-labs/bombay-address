@@ -482,6 +482,17 @@ validity.
   randomized counterpart of the Segment 29 deterministic Eq injections.
   **No divergence.**
 
+### Segment 31 — replacement-churn linearizability
+
+- `tests/linearizability.rs` gained
+  `replacement_churn_on_one_address_is_linearizable`: 6 threads × 3
+  rounds of claim/resolve/release on ONE hot address — the ownership
+  handoff between threads exercises the release→reclaim race the checker
+  must order (hot-address log capped at 54 ops, within the 63-op bitmask
+  bound). The linearizability lane previously only had per-thread
+  self-owned-release scripts; cross-thread replacement churn was
+  untested as a targeted history. **Linearizable.**
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

@@ -251,7 +251,6 @@ fn hot_address_history_is_linearizable() {
 
 #[test]
 fn three_address_history_is_linearizable_per_address() {
-    // 6 threads over 3 addresses with mixed op patterns.
     let scripts: Vec<Vec<ScriptOp>> = (0..6)
         .map(|thread| {
             (0..4)
@@ -268,6 +267,27 @@ fn three_address_history_is_linearizable_per_address() {
         })
         .collect();
     let logs = run_scripted(&scripts);
+    check_all_addresses(&logs);
+}
+
+/// Replacement churn on ONE hot address: many threads claim, resolve,
+/// release, and RE-CLAIM the same address across rounds — the ownership
+/// handoff between threads exercises the release→reclaim race the
+/// checker must order. Every recorded history must be linearizable.
+#[test]
+fn replacement_churn_on_one_address_is_linearizable() {
+    // 6 threads × 3 rounds of claim/resolve/release on address 0: the
+    // hot-address log stays under the checker's 63-op bitmask cap
+    // (6 × 3 × 3 = 54 ops).
+    let scripts: Vec<Vec<ScriptOp>> = (0..6)
+        .map(|_| {
+            (0..3)
+                .flat_map(|_| [ScriptOp::Claim(0), ScriptOp::Resolve(0), ScriptOp::ReleaseOwned])
+                .collect()
+        })
+        .collect();
+    let logs = run_scripted(&scripts);
+    assert!(logs[0].len() < 64, "{} ops recorded", logs[0].len());
     check_all_addresses(&logs);
 }
 
