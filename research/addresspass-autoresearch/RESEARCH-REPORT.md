@@ -320,6 +320,15 @@ validity.
   surviving whole-chain cascades, nor snapshot pinning across churn.
   **No divergence.**
 
+### Segment 18 — 6-address exhaustive frontier cell
+
+- `tests/sequential_model.rs` gained the 6-address cell of the exhaustive
+  table (2-addr d7, 3-addr d6, 4-addr d5, 5-addr d4): 18 symbols per
+  position, depths 1..=3, **6,174 histories** replayed from a clean state
+  against the reference model. First exhaustive lane with a wider fan-out
+  than five addresses. **No divergence.** Suite total now ~1,265,658
+  exhaustive histories.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;

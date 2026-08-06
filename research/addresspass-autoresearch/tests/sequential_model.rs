@@ -147,6 +147,16 @@ fn exhaustive_five_address_histories_up_to_depth_4_match_model() {
 }
 
 #[test]
+// 6 addresses, 18 symbols per position, depths 1..=3: 6,174 histories.
+// Complements the deepest cells (2-addr d7) with a wider fan-out — the
+// first exhaustive lane over more than five simultaneous registrations.
+// Native-only.
+#[cfg_attr(miri, ignore = "exhaustive exploration is a native-speed workload")]
+fn exhaustive_six_address_histories_up_to_depth_3_match_model() {
+    assert_eq!(explore_all::<6>(3), 6_174);
+}
+
+#[test]
 fn stale_generation_is_unreachable_through_the_public_api() {
     // Documented invariant: releasing an old generation cannot remove a
     // newer one. Through the public API a stale lease cannot exist — a
