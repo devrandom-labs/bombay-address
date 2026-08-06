@@ -581,7 +581,7 @@ a re-entrant `Hash` self-deadlocks.**
   rather than hanging the suite.
 - No fix attempted (production is immutable for this campaign).
 
-## FINDING-002
+## FINDING-002 (RESOLVED: explicit `shrink_to_fit` added to production)
 
 **A drained address space retains the full peak table allocation forever.**
 
@@ -606,6 +606,12 @@ a re-entrant `Hash` self-deadlocks.**
   `full_drain_returns_table_memory` (ignored; assertion expresses the
   correct behavior — retention ≤ 64 KiB after a full drain).
 - No fix attempted (production is immutable for this campaign).
+  - **Resolution note (2026-08-06):** addressed in production by adding
+    `AddressSpace::shrink_to_fit` (explicit reclamation caller must call;
+    drain retains capacity until then). The ignored reproducer remains as
+    historical evidence. The production test suite now includes an explicit-
+    shrink counting-allocator test (`tests/reclamation_alloc.rs`, grow →
+    drain → `shrink_to_fit` → memory returns).
 
 ### Segment 2 — panic safety, linearizability checking, string addresses, poison lane
 
@@ -680,7 +686,7 @@ removal permanently wedges the address.**
   caught release panic). Fails deterministically: the entry leaks.
 - No fix attempted (production is immutable for this campaign).
 
-## FINDING-004
+## FINDING-004 (RESOLVED: loom `recover` helper removed)
 
 **The loom build's poison recovery is unreachable; any mid-write panic
 kills the space permanently (loom builds).**
@@ -716,8 +722,14 @@ kills the space permanently (loom builds).**
   expresses the correct behavior — post-poison operations succeed and
   the table is consistent). Fails deterministically.
 - No fix attempted (production is immutable for this campaign).
+  - **Resolution note (2026-08-06):** the misleading `recover` helper and
+    `.unwrap_or_else(recover)` wrappers were removed from the `cfg(loom)`
+    path. Loom's `RwLock::read()`/`write()` always return `Ok` — the
+    guards now honestly use `.unwrap()` with a comment documenting that
+    loom never poisons. No claim of poison recovery remains.
+    All active loom models continue to pass.
 
-## FINDING-005
+## FINDING-005 (RESOLVED: classified as caller-contract violation)
 
 **`claim` splits the key identity: it duplicate-checks and leases the
 ORIGINAL address but stores the CLONE — a legal non-identity `Clone`
@@ -776,6 +788,15 @@ every value at every instant).
   that the mechanism under test is the non-identity `Clone`, not the
   harness.
 - No fix attempted (production is immutable for this campaign).
+  - **Resolution note (2026-08-06):** classified as a caller-contract
+    violation, not an addresspass implementation defect. Rust's logical
+    `Clone` contract for an `Eq` type expects the clone to remain equal to
+    the source (`a.clone() == a`, with equivalent hash). The research probe
+    key deliberately changes logical identity during `clone()`, breaking
+    this contract. Address key types must implement identity-preserving
+    `Clone` (documented in `crates/addresspass/src/lib.rs` as the key
+    contracts section). The ignored research tests remain as adversarial
+    caller-contract probes.
 
 ## Miri
 
