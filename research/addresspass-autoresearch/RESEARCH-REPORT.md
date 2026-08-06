@@ -344,6 +344,19 @@ validity.
   single-threaded, so the spawn-race was not previously interleaving-
   checked.
 
+### Segment 20 — panic-churn proptest
+
+- `tests/panic_churn_proptest.rs` (256 cases, up to 80 ops): caller `Hash`
+  panics injected at RANDOM history positions via a shared armed flag,
+  not the hand-picked calls of the deterministic panic tests. A permanent
+  guard registration keeps the table non-empty so the duplicate-check
+  `get` always hashes; every armed claim panics at the duplicate check
+  and must be a clean no-op (model in lockstep, len exact, space fully
+  functional after each caught panic). All other ops (claim/release/
+  resolve/len) replay exactly against the reference model. **No
+  divergence.** The insert-path panic stays covered by the deterministic
+  `hash_panic_during_claim_insert_leaves_no_ghost_registration`.
+
 ## FINDING-001
 
 **Claim/resolve/release run caller `Hash`/`Eq` code under the table lock;
