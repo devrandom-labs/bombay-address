@@ -25,6 +25,10 @@ The `Lease` is the authority to release one exact registration generation.
 Dropping an old lease cannot remove a newer owner. Resolved endpoints are typed
 snapshots, and user `Clone`/`Drop` code runs outside the table lock.
 
+`Lease::registration_id()` returns an opaque identity for that exact local
+registration. It is independent of the address type, process-local, and grants
+no ownership, release authority, authentication, or durable identity.
+
 ## Verification
 
 ```bash

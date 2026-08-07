@@ -9,6 +9,12 @@ The address space guarantees at most one live owner per address, linearizable
 claim/resolve/release operations, and generation-safe release. Endpoint clone
 and drop callbacks execute outside the table lock.
 
+Every successful registration has a distinct process-local identity. Identity
+generations never wrap or recycle: after exhausting its generation space, an
+address space permanently rejects new claims. The identity includes an opaque
+address-space scope, so independent spaces cannot produce equal registration
+identities.
+
 The retained `research/address-tests/` workspace contains reference-model
 property tests, bounded Loom models, deterministic stress, allocation-retention
 checks, Miri ownership checks, fuzz targets, and replay corpora. See its

@@ -14,6 +14,7 @@
 use loom::sync::Arc;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
+use std::num::NonZeroU64;
 #[cfg(not(loom))]
 use std::sync::Arc;
 
@@ -84,6 +85,8 @@ pub(crate) struct Entry<E> {
 /// address, hashed with splitmix64.
 pub(crate) struct OpenTable<A, E> {
     entries: HashMap<A, Entry<E>, BuildHasherDefault<AddressHasher>>,
+    // Zero is the permanent exhausted state. Generations never wrap or reuse.
+    next_generation: u64,
 }
 
 impl<A, E> OpenTable<A, E> {
@@ -91,7 +94,21 @@ impl<A, E> OpenTable<A, E> {
     pub(crate) fn new() -> Self {
         Self {
             entries: HashMap::default(),
+            next_generation: 1,
         }
+    }
+
+    /// Allocate the next registration generation, permanently exhausting the
+    /// table after issuing `u64::MAX` exactly once.
+    pub(crate) fn take_generation(&mut self) -> Option<NonZeroU64> {
+        let generation = NonZeroU64::new(self.next_generation)?;
+        self.next_generation = generation.get().checked_add(1).unwrap_or(0);
+        Some(generation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_next_generation(&mut self, generation: u64) {
+        self.next_generation = generation;
     }
 
     #[must_use]
@@ -152,6 +169,7 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
 #[cfg(test)]
 mod tests {
     use super::{OpenTable, hash_key};
+    use std::num::NonZeroU64;
 
     #[test]
     fn insert_get_roundtrip() {
@@ -195,6 +213,15 @@ mod tests {
         assert_eq!(table.get(&1).expect("kept").endpoint.as_ref(), &"first");
         assert!(table.remove_if(&1, 1).is_some());
         assert!(table.get(&1).is_none());
+    }
+
+    #[test]
+    fn generation_exhaustion_never_wraps_or_reuses() {
+        let mut table = OpenTable::<u64, u64>::new();
+        table.set_next_generation(u64::MAX);
+        assert_eq!(table.take_generation(), NonZeroU64::new(u64::MAX));
+        assert_eq!(table.take_generation(), None);
+        assert_eq!(table.take_generation(), None);
     }
 
     #[test]

@@ -29,15 +29,12 @@ mod table;
 
 use core::hash::Hash;
 #[cfg(loom)]
-use loom::sync::atomic::{AtomicU64, Ordering};
-#[cfg(loom)]
 use loom::sync::{Arc, RwLock};
 #[cfg(not(loom))]
 use parking_lot::RwLock;
 #[cfg(not(loom))]
 use std::sync::Arc;
-#[cfg(not(loom))]
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{fmt, hash::Hasher, num::NonZeroU64};
 
 use table::OpenTable;
 
@@ -45,8 +42,84 @@ use table::OpenTable;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressInUse<A>(pub A);
 
+/// The reason an address claim failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaimError<A> {
+    /// An owner is already registered at the returned address.
+    AddressInUse(A),
+    /// This address space has issued every available registration identity.
+    ///
+    /// Exhaustion is permanent: identities are never wrapped or reused.
+    RegistrationIdsExhausted(A),
+}
+
+struct RegistrationScopeMarker {
+    _private: u8,
+}
+
+/// Opaque identity of one address-space scope within the current process.
+///
+/// Clones of an [`AddressSpace`] have the same scope. Independently created
+/// spaces have different scopes. This value is process-local: it is not a
+/// durable identifier, an authentication credential, or registration
+/// authority.
+#[derive(Clone)]
+pub struct RegistrationScopeId(Arc<RegistrationScopeMarker>);
+
+impl PartialEq for RegistrationScopeId {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for RegistrationScopeId {}
+
+impl core::hash::Hash for RegistrationScopeId {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Arc::as_ptr(&self.0).hash(state);
+    }
+}
+
+impl fmt::Debug for RegistrationScopeId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("RegistrationScopeId")
+            .field(&Arc::as_ptr(&self.0))
+            .finish()
+    }
+}
+
+/// Opaque identity of one exact registration within the current process.
+///
+/// The identity is independent of the address and endpoint types. It grants no
+/// ownership, resolution, or release authority and is meaningful only for
+/// process-local equality and correlation.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct RegistrationId {
+    scope: RegistrationScopeId,
+    generation: NonZeroU64,
+}
+
+impl RegistrationId {
+    /// Return the address-space scope in which this registration was created.
+    #[must_use]
+    pub fn scope_id(&self) -> &RegistrationScopeId {
+        &self.scope
+    }
+}
+
+impl fmt::Debug for RegistrationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RegistrationId")
+            .field("scope", &self.scope)
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
 struct Inner<A, E> {
-    next_generation: AtomicU64,
+    scope: RegistrationScopeId,
     entries: RwLock<OpenTable<A, E>>,
 }
 
@@ -99,10 +172,16 @@ impl<A, E> AddressSpace<A, E> {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Inner {
-                next_generation: AtomicU64::new(1),
+                scope: RegistrationScopeId(Arc::new(RegistrationScopeMarker { _private: 0 })),
                 entries: RwLock::new(OpenTable::new()),
             }),
         }
+    }
+
+    /// Return this address space's opaque, process-local registration scope.
+    #[must_use]
+    pub fn registration_scope_id(&self) -> RegistrationScopeId {
+        self.inner.scope.clone()
     }
 
     /// Return the number of live registrations.
@@ -141,6 +220,11 @@ where
     /// # Errors
     /// Returns [`AddressInUse`] when an owner is already registered.
     ///
+    /// # Panics
+    /// Panics after this address space has issued all `u64::MAX` registration
+    /// identities. Use [`AddressSpace::try_claim`] to handle this physically
+    /// unreachable boundary without panicking. Identities never wrap or reuse.
+    ///
     /// # Key contracts
     ///
     /// The address key is `Clone`d before the write guard is taken, so
@@ -149,15 +233,39 @@ where
     /// docs](index.html#address-key-contracts)). The original key is
     /// given to the returned [`Lease`]; the clone is stored in the table.
     pub fn claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, AddressInUse<A>> {
+        match self.try_claim(address, endpoint) {
+            Ok(lease) => Ok(lease),
+            Err(ClaimError::AddressInUse(address)) => Err(AddressInUse(address)),
+            Err(ClaimError::RegistrationIdsExhausted(_)) => {
+                panic!("registration identities exhausted")
+            }
+        }
+    }
+
+    /// Exclusively claim `address`, including explicit identity-exhaustion
+    /// handling.
+    ///
+    /// This is equivalent to [`AddressSpace::claim`] during ordinary
+    /// operation. Unlike `claim`, it returns
+    /// [`ClaimError::RegistrationIdsExhausted`] after the final identity has
+    /// been issued. Exhaustion is permanent.
+    ///
+    /// # Errors
+    /// Returns [`ClaimError::AddressInUse`] when an owner is already
+    /// registered. Returns [`ClaimError::RegistrationIdsExhausted`] after the
+    /// address space has issued all `u64::MAX` registration identities.
+    pub fn try_claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, ClaimError<A>> {
         // The key copy for the table happens before the write guard is
         // taken: caller `A: Clone` code must not run under the lock.
         let key = address.clone();
         let mut entries = self.inner.write_entries();
         if entries.get(&address).is_some() {
-            return Err(AddressInUse(address));
+            return Err(ClaimError::AddressInUse(address));
         }
-        let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
-        entries.insert(key, generation, endpoint);
+        let Some(generation) = entries.take_generation() else {
+            return Err(ClaimError::RegistrationIdsExhausted(address));
+        };
+        entries.insert(key, generation.get(), endpoint);
         Ok(Lease {
             inner: self.inner.clone(),
             address,
@@ -195,7 +303,7 @@ where
 {
     inner: Arc<Inner<A, E>>,
     address: A,
-    generation: u64,
+    generation: NonZeroU64,
     released: bool,
 }
 
@@ -207,6 +315,18 @@ where
     #[must_use]
     pub fn address(&self) -> &A {
         &self.address
+    }
+
+    /// Return the opaque, process-local identity of this exact registration.
+    ///
+    /// The returned value grants no ownership or release authority and does
+    /// not keep the registration or endpoint alive.
+    #[must_use]
+    pub fn registration_id(&self) -> RegistrationId {
+        RegistrationId {
+            scope: self.inner.scope.clone(),
+            generation: self.generation,
+        }
     }
 
     /// Release this registration immediately.
@@ -232,7 +352,7 @@ where
         // cannot deadlock against the lock.
         let removed = {
             let mut entries = self.inner.write_entries();
-            entries.remove_if(&self.address, self.generation)
+            entries.remove_if(&self.address, self.generation.get())
         };
         drop(removed);
     }
@@ -249,18 +369,91 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AddressInUse, AddressSpace};
+    use super::{AddressSpace, ClaimError};
+    use std::collections::HashSet;
 
     #[test]
     fn lease_owns_and_releases_one_registration() {
         let space = AddressSpace::new();
         let lease = space.claim(7, "first").unwrap();
         assert_eq!(space.resolve(&7), Some("first"));
-        assert!(matches!(space.claim(7, "second"), Err(AddressInUse(7))));
+        assert!(matches!(
+            space.try_claim(7, "second"),
+            Err(ClaimError::AddressInUse(7))
+        ));
         drop(lease);
         assert_eq!(space.resolve(&7), None);
         let replacement = space.claim(7, "second").unwrap();
         assert_eq!(space.resolve(&7), Some("second"));
         drop(replacement);
+    }
+
+    #[test]
+    fn registration_identity_distinguishes_replacements() {
+        let space = AddressSpace::new();
+        let first = space.claim("worker", 1).unwrap();
+        let first_id = first.registration_id();
+        first.release();
+
+        let second = space.claim("worker", 2).unwrap();
+        let second_id = second.registration_id();
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_id.scope_id(), second_id.scope_id());
+
+        let ids = HashSet::from([first_id, second_id]);
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn registration_identity_is_scoped_to_the_address_space() {
+        let first = AddressSpace::new();
+        let first_peer = first.clone();
+        let second = AddressSpace::new();
+
+        assert_eq!(
+            first.registration_scope_id(),
+            first_peer.registration_scope_id()
+        );
+        assert_ne!(
+            first.registration_scope_id(),
+            second.registration_scope_id()
+        );
+
+        let first_id = first.claim((1_u8, 2_u8), ()).unwrap().registration_id();
+        let second_id = second.claim((1_u8, 2_u8), ()).unwrap().registration_id();
+        assert_ne!(first_id, second_id);
+    }
+
+    #[test]
+    fn retaining_an_identity_grants_no_registration_lifetime() {
+        let space = AddressSpace::new();
+        let lease = space
+            .claim(String::from("worker"), String::from("mailbox"))
+            .unwrap();
+        let identity = lease.registration_id();
+        drop(lease);
+
+        assert_eq!(space.resolve(&String::from("worker")), None);
+        let replacement = space
+            .claim(String::from("worker"), String::from("replacement"))
+            .unwrap();
+        assert_ne!(identity, replacement.registration_id());
+    }
+
+    #[test]
+    fn exhausted_space_rejects_claims_without_reusing_an_identity() {
+        let space = AddressSpace::new();
+        space.inner.write_entries().set_next_generation(u64::MAX);
+
+        let last = space.claim(1_u64, "last").unwrap();
+        let last_id = last.registration_id();
+        last.release();
+
+        assert!(matches!(
+            space.try_claim(2, "never inserted"),
+            Err(ClaimError::RegistrationIdsExhausted(2))
+        ));
+        assert!(space.is_empty());
+        assert_eq!(last_id.scope_id(), &space.registration_scope_id());
     }
 }
