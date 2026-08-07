@@ -1,0 +1,49 @@
+name: Prune release-plz branches
+
+# release-plz closes superseded release PRs without merging their timestamped
+# branches. GitHub only auto-deletes merged PR branches, so prune closed release
+# branches explicitly while preserving every branch with an open PR.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  prune:
+    name: Prune orphaned release-plz branches
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+
+      - name: Delete release-plz branches with no open PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          open_prs="$(gh pr list --repo "$REPO" --state open --limit 200 \
+            --json headRefName --jq '.[].headRefName' | sort -u)"
+          branches="$(gh api --paginate "repos/$REPO/branches" \
+            --jq '.[].name' | { grep '^release-plz-' || true; })"
+          if [ -z "$branches" ]; then
+            echo "No release-plz-* branches; nothing to prune."
+            exit 0
+          fi
+          while IFS= read -r branch; do
+            [ -z "$branch" ] && continue
+            if printf '%s\n' "$open_prs" | grep -qxF "$branch"; then
+              echo "keep   $branch (open PR)"
+            else
+              echo "prune  $branch"
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$branch"
+            fi
+          done <<< "$branches"
