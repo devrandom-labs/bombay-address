@@ -142,7 +142,10 @@ fn run(ops: &[(u8, u8)], panic_in_eq: bool) {
             }
             2 => {
                 assert_eq!(
-                    space.resolve(&key(address, &armed, panic_in_eq)),
+                    space
+                        .resolve(&key(address, &armed, panic_in_eq))
+                        .as_deref()
+                        .copied(),
                     model.get(&address).copied(),
                     "step {step}: resolve({address}) diverged"
                 );

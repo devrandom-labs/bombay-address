@@ -109,11 +109,11 @@ fn resolve_never_returns_a_foreign_endpoint_during_churn() {
                     probe = probe.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
                     let address = probe % (WRITERS * RANGE);
                     if let Some(endpoint) = space.resolve(&address) {
-                        let owner_range = endpoint / TAG;
+                        let owner_range = *endpoint / TAG;
                         let address_range = address / RANGE;
                         assert_eq!(
                             owner_range, address_range,
-                            "resolve({address}) returned endpoint {endpoint} tagged \
+                            "resolve({address}) returned endpoint {endpoint:?} tagged \
                              for range {owner_range}"
                         );
                     }
@@ -172,8 +172,8 @@ fn hot_address_release_resolve_race_stays_within_claimed_values() {
                     if let Some(endpoint) = space.resolve(&0) {
                         let high_water = claimed.load(Ordering::Acquire);
                         assert!(
-                            endpoint >= 1 && endpoint <= high_water,
-                            "resolve returned {endpoint}, outside claimed range 1..={high_water}"
+                            *endpoint >= 1 && *endpoint <= high_water,
+                            "resolve returned {endpoint:?}, outside claimed range 1..={high_water}"
                         );
                     }
                 }
@@ -211,7 +211,7 @@ fn cloned_spaces_across_threads_share_registrations() {
     };
     gate.wait(); // start together
     gate.wait(); // claim landed; claimant is parked on `resolved`
-    assert_eq!(space.resolve(&42), Some(1_000));
+    assert_eq!(space.resolve(&42).as_deref().copied(), Some(1_000));
     resolved.wait(); // allow the release
     gate.wait(); // release landed
     assert_eq!(space.resolve(&42), None);
@@ -269,7 +269,7 @@ fn cross_thread_lease_handoff_stays_exact() {
             for round in 0..ROUNDS {
                 let address = round % ADDRESSES;
                 if let Some(endpoint) = space.resolve(&address) {
-                    assert!((1..=ROUNDS).contains(&endpoint), "foreign endpoint {endpoint}");
+                    assert!((1..=ROUNDS).contains(&*endpoint), "foreign endpoint {endpoint:?}");
                 }
             }
         })

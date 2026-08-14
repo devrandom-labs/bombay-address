@@ -16,14 +16,14 @@ fn lease_outlives_all_space_handles_and_still_releases_exactly() {
         lease = space.claim(1_u64, 10_u64).unwrap();
         // `space` drops here; `peer` and `lease` keep Inner alive.
     }
-    assert_eq!(peer.resolve(&1), Some(10));
+    assert_eq!(peer.resolve(&1).as_deref().copied(), Some(10));
     lease.release();
     assert_eq!(peer.resolve(&1), None);
     assert!(peer.is_empty());
     // The peer remains fully operational after the original handle is
     // gone and the lease cycle completed.
     let again = peer.claim(1_u64, 20_u64).unwrap();
-    assert_eq!(peer.resolve(&1), Some(20));
+    assert_eq!(peer.resolve(&1).as_deref().copied(), Some(20));
     again.release();
     assert!(peer.is_empty());
 }
@@ -38,7 +38,7 @@ fn resolved_snapshot_outlives_the_space_and_the_registration() {
         drop(space);
         snapshot
     };
-    assert_eq!(snapshot, "persistent");
+    assert_eq!(snapshot.as_str(), "persistent");
 }
 
 #[test]
@@ -64,7 +64,7 @@ fn default_constructed_space_behaves_like_new() {
     assert!(space.is_empty());
     let lease = space.claim(0, 1).unwrap();
     assert_eq!(space.len(), 1);
-    assert_eq!(space.resolve(&0), Some(1));
+    assert_eq!(space.resolve(&0).as_deref().copied(), Some(1));
     lease.release();
     assert!(space.is_empty());
 }
@@ -83,11 +83,11 @@ fn independent_spaces_share_no_state() {
     let second = AddressSpace::new();
     let lease_a = first.claim(1_u64, 10_u64).unwrap();
     let lease_b = second.claim(1_u64, 20_u64).unwrap(); // same address: independent
-    assert_eq!(first.resolve(&1), Some(10));
-    assert_eq!(second.resolve(&1), Some(20));
+    assert_eq!(first.resolve(&1).as_deref().copied(), Some(10));
+    assert_eq!(second.resolve(&1).as_deref().copied(), Some(20));
     lease_a.release();
     assert_eq!(first.resolve(&1), None);
-    assert_eq!(second.resolve(&1), Some(20)); // untouched by peer release
+    assert_eq!(second.resolve(&1).as_deref().copied(), Some(20)); // untouched by peer release
     assert_eq!(second.len(), 1);
     lease_b.release();
     assert!(first.is_empty() && second.is_empty());

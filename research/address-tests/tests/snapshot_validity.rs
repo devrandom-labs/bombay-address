@@ -7,7 +7,7 @@
 //! Excluded from Miri (case counts are a native-speed workload).
 #![cfg(not(miri))]
 
-use bombay_address::{AddressSpace, Lease};
+use bombay_address::{AddressSpace, Lease, Resolved};
 use proptest::prelude::*;
 
 /// Run a history, collecting every resolve snapshot; after draining the
@@ -16,7 +16,7 @@ fn run(ops: &[(u8, u8)]) {
     let space = AddressSpace::<u64, u64>::new();
     let mut model: std::collections::BTreeMap<u64, u64> = Default::default();
     let mut leases: std::collections::BTreeMap<u64, Lease<u64, u64>> = Default::default();
-    let mut snapshots: Vec<u64> = Vec::new();
+    let mut snapshots: Vec<Resolved<u64>> = Vec::new();
     let mut endpoint = 0_u64;
     for (step, (address, op)) in ops.iter().enumerate() {
         let address = u64::from(address % 6);
@@ -32,7 +32,11 @@ fn run(ops: &[(u8, u8)]) {
             }
             1 | 2 => {
                 let resolved = space.resolve(&address);
-                assert_eq!(resolved, model.get(&address).copied(), "step {step}");
+                assert_eq!(
+                    resolved.as_deref().copied(),
+                    model.get(&address).copied(),
+                    "step {step}"
+                );
                 if let Some(value) = resolved {
                     snapshots.push(value); // held past release/replacement
                 }
@@ -51,12 +55,12 @@ fn run(ops: &[(u8, u8)]) {
     assert!(space.is_empty());
     // The space is empty; every snapshot ever taken is still intact.
     for (i, value) in snapshots.iter().enumerate() {
-        assert!(*value >= 1 && *value <= endpoint, "snapshot {i} corrupted: {value}");
+        assert!(**value >= 1 && **value <= endpoint, "snapshot {i} corrupted: {value:?}");
     }
     // Exactness: snapshots must equal the values recorded at resolve time
     // (they ARE the values; this pins that no release/replacement mutated
     // or freed the underlying endpoint while a snapshot lived).
-    assert!(snapshots.iter().all(|&v| v <= endpoint));
+    assert!(snapshots.iter().all(|value| **value <= endpoint));
 }
 
 proptest! {
@@ -84,10 +88,10 @@ fn snapshots_pin_their_generation_value() {
     first.release();
     let second = space.claim(0_u64, String::from("new")).unwrap();
     let new_snapshot = space.resolve(&0).unwrap();
-    assert_eq!(old_snapshot, "old");
-    assert_eq!(new_snapshot, "new");
+    assert_eq!(old_snapshot.as_str(), "old");
+    assert_eq!(new_snapshot.as_str(), "new");
     second.release();
-    assert_eq!(old_snapshot, "old");
-    assert_eq!(new_snapshot, "new");
+    assert_eq!(old_snapshot.as_str(), "old");
+    assert_eq!(new_snapshot.as_str(), "new");
     assert!(space.is_empty());
 }

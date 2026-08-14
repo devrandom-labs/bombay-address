@@ -34,7 +34,7 @@ fn run(ops: &[((u64, u64), u8)]) {
             }
             1 => {
                 assert_eq!(
-                    space.resolve(&address),
+                    space.resolve(&address).as_deref().copied(),
                     model.get(&address).copied(),
                     "step {step}"
                 );
@@ -76,12 +76,12 @@ fn tuple_parts_are_order_sensitive() {
     let space = AddressSpace::new();
     let ab = space.claim((1_u64, 2_u64), 12_u64).unwrap();
     let ba = space.claim((2_u64, 1_u64), 21_u64).unwrap();
-    assert_eq!(space.resolve(&(1, 2)), Some(12));
-    assert_eq!(space.resolve(&(2, 1)), Some(21));
+    assert_eq!(space.resolve(&(1, 2)).as_deref().copied(), Some(12));
+    assert_eq!(space.resolve(&(2, 1)).as_deref().copied(), Some(21));
     assert_eq!(space.len(), 2);
     ab.release();
     assert_eq!(space.resolve(&(1, 2)), None);
-    assert_eq!(space.resolve(&(2, 1)), Some(21));
+    assert_eq!(space.resolve(&(2, 1)).as_deref().copied(), Some(21));
     ba.release();
     assert!(space.is_empty());
 }
@@ -105,7 +105,7 @@ fn u128_addresses_spanning_both_halves() {
     }
     assert_eq!(space.len(), addresses.len());
     for (i, &address) in addresses.iter().enumerate() {
-        assert_eq!(space.resolve(&address), Some(i as u64));
+        assert_eq!(space.resolve(&address).as_deref().copied(), Some(i as u64));
     }
     for lease in leases {
         lease.release();

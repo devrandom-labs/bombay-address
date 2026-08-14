@@ -40,7 +40,7 @@ fn concurrent_duplicate_claims_admit_exactly_one_owner() {
             }
         }
         // The winner's endpoint is live; the loser's never appears.
-        assert_eq!(space.resolve(&1), Some(winner));
+        assert_eq!(space.resolve(&1).as_deref().copied(), Some(winner));
     });
 }
 
@@ -74,10 +74,10 @@ fn replacement_never_exposes_stale_or_torn_endpoint() {
         let writer = thread::spawn(move || {
             drop(lease);
             let fresh = writer_space.claim(1_u64, 20_u64).expect("freed by drop");
-            assert_eq!(writer_space.resolve(&1), Some(20));
+            assert_eq!(writer_space.resolve(&1).as_deref().copied(), Some(20));
             drop(fresh);
         });
-        let reader = thread::spawn(move || match reader_space.resolve(&1) {
+        let reader = thread::spawn(move || match reader_space.resolve(&1).as_deref().copied() {
             Some(10) | Some(20) | None => {}
             Some(other) => panic!("torn or stale endpoint observed: {other}"),
         });

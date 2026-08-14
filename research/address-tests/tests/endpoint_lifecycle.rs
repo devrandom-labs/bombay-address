@@ -142,7 +142,7 @@ fn boundary_addresses_coexist_exactly() {
     }
     assert_eq!(space.len(), 4);
     for (i, &address) in addresses.iter().enumerate() {
-        assert_eq!(space.resolve(&address), Some(i as u64));
+        assert_eq!(space.resolve(&address).as_deref().copied(), Some(i as u64));
     }
     // Duplicate claims on the boundary keys are rejected with the exact
     // address returned.

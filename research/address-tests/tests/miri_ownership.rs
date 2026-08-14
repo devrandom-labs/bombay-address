@@ -51,7 +51,11 @@ fn miri_model_checked_history_with_heap_endpoints() {
             }
             2 => {
                 let expected = model.resolve(address).map(|e| format!("endpoint-{e}"));
-                assert_eq!(space.resolve(&address), expected, "step {step}");
+                assert_eq!(
+                    space.resolve(&address).as_deref().cloned(),
+                    expected,
+                    "step {step}"
+                );
             }
             3 => {
                 if let Some((generation, index)) = generations.remove(&address) {
@@ -79,7 +83,7 @@ fn miri_snapshot_outlives_release() {
     let lease = space.claim(0_u64, String::from("snapshot-data")).unwrap();
     let snapshot = space.resolve(&0).unwrap();
     lease.release();
-    assert_eq!(snapshot, "snapshot-data");
+    assert_eq!(snapshot.as_str(), "snapshot-data");
     assert_eq!(space.resolve(&0), None);
 }
 

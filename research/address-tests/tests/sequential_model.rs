@@ -63,7 +63,7 @@ fn replay<const N: usize>(path: &[Op]) {
             }
             Op::Resolve(address) => {
                 assert_eq!(
-                    space.resolve(&u64::from(address)),
+                    space.resolve(&u64::from(address)).as_deref().copied(),
                     model.resolve(u64::from(address)),
                     "step {step}: resolve({address}) diverged from model"
                 );
@@ -176,7 +176,7 @@ fn stale_generation_is_unreachable_through_the_public_api() {
     let first = space.claim(1_u64, 10_u64).unwrap();
     first.release();
     let second = space.claim(1_u64, 20_u64).unwrap();
-    assert_eq!(space.resolve(&1), Some(20));
+    assert_eq!(space.resolve(&1).as_deref().copied(), Some(20));
     second.release();
     assert_eq!(space.resolve(&1), None);
     assert!(space.is_empty());
@@ -189,18 +189,20 @@ fn release_then_reclaim_then_release_is_exact() {
     lease.release();
     // Re-registration works immediately after an explicit release.
     let second = space.claim(1_u64, 20_u64).unwrap();
-    assert_eq!(space.resolve(&1), Some(20));
+    assert_eq!(space.resolve(&1).as_deref().copied(), Some(20));
     second.release();
     assert_eq!(space.len(), 0);
 }
 
 #[test]
-fn resolve_returns_independent_snapshots() {
+fn resolve_returns_read_only_snapshots() {
     let space = AddressSpace::new();
     let lease = space.claim(1_u64, String::from("live")).unwrap();
-    let mut snapshot = space.resolve(&1).unwrap();
-    snapshot.push_str("-mutated");
-    assert_eq!(space.resolve(&1).as_deref(), Some("live"));
+    let snapshot = space.resolve(&1).unwrap();
+    let peer_snapshot = snapshot.clone();
+    assert_eq!(snapshot.as_str(), "live");
+    assert_eq!(peer_snapshot.as_str(), "live");
+    assert_eq!(space.resolve(&1).as_deref().map(String::as_str), Some("live"));
     drop(lease);
 }
 
@@ -334,7 +336,7 @@ fn hash_colliding_addresses_remain_fully_correct() {
     }
     assert_eq!(space.len(), population as usize);
     for i in 0..population {
-        assert_eq!(space.resolve(&Colliding(i)), Some(i));
+        assert_eq!(space.resolve(&Colliding(i)).as_deref().copied(), Some(i));
     }
     // Release every third lease, verify survivors, then drain the rest.
     let mut pending: Vec<(usize, Lease<Colliding, u64>)> =
@@ -347,7 +349,7 @@ fn hash_colliding_addresses_remain_fully_correct() {
     }
     for (i, _) in &pending {
         let i = *i as u64;
-        assert_eq!(space.resolve(&Colliding(i)), Some(i));
+        assert_eq!(space.resolve(&Colliding(i)).as_deref().copied(), Some(i));
     }
     for (i, lease) in pending {
         let i = i as u64;

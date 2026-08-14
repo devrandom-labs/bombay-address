@@ -135,7 +135,10 @@ pub fn fuzz_entry(data: &[u8]) {
                 }
             }
             2 => {
-                assert_eq!(space.resolve(&address), model.resolve(address));
+                assert_eq!(
+                    space.resolve(&address).as_deref().copied(),
+                    model.resolve(address)
+                );
             }
             3 => {
                 assert_eq!(space.len(), model.len());
@@ -194,7 +197,10 @@ pub fn fuzz_entry_colliding(data: &[u8]) {
                 }
             }
             2 => {
-                assert_eq!(space.resolve(&Colliding(address)), model.resolve(address));
+                assert_eq!(
+                    space.resolve(&Colliding(address)).as_deref().copied(),
+                    model.resolve(address)
+                );
             }
             3 => {
                 assert_eq!(space.len(), model.len());
@@ -259,7 +265,7 @@ pub fn fuzz_entry_strings(data: &[u8]) {
             }
             2 => {
                 assert_eq!(
-                    space.resolve(&address),
+                    space.resolve(&address).as_deref().copied(),
                     model.get(&address).copied(),
                     "step {step}"
                 );
@@ -314,7 +320,11 @@ pub fn fuzz_entry_wide(data: &[u8]) {
                 }
             }
             2 => {
-                assert_eq!(space.resolve(&address), model.resolve(address), "step {step}");
+                assert_eq!(
+                    space.resolve(&address).as_deref().copied(),
+                    model.resolve(address),
+                    "step {step}"
+                );
             }
             3 => {
                 assert_eq!(space.len(), model.len(), "step {step}");
@@ -377,7 +387,7 @@ pub fn fuzz_entry_isolation(data: &[u8]) {
                 // by everything routed to its peer.
                 for (side, (space, model)) in spaces.iter().zip(models.iter()).enumerate() {
                     assert_eq!(
-                        space.resolve(&address),
+                        space.resolve(&address).as_deref().copied(),
                         model.resolve(address),
                         "step {step}: space {side} diverged"
                     );

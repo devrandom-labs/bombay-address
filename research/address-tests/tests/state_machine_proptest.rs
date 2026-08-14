@@ -73,7 +73,7 @@ fn run_history(ops: &[Op]) {
             }
             Op::Resolve(address) => {
                 assert_eq!(
-                    space.resolve(&u64::from(address)),
+                    space.resolve(&u64::from(address)).as_deref().copied(),
                     model.resolve(u64::from(address)),
                     "step {step}: resolve({address}) diverged"
                 );
