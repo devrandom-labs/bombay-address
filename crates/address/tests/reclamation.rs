@@ -13,7 +13,7 @@ fn shrink_to_fit_on_new_space_is_safe() {
     space.shrink_to_fit();
     assert!(space.is_empty());
     let lease = space.claim(1, 10).unwrap();
-    assert_eq!(space.resolve(&1), Some(10));
+    assert_eq!(space.resolve(&1).as_deref().copied(), Some(10));
     lease.release();
 }
 
@@ -29,7 +29,7 @@ fn shrink_to_fit_on_empty_used_space_is_idempotent() {
     space.shrink_to_fit();
     assert!(space.is_empty());
     let re = space.claim(1, 20).unwrap();
-    assert_eq!(space.resolve(&1), Some(20));
+    assert_eq!(space.resolve(&1).as_deref().copied(), Some(20));
     re.release();
 }
 
@@ -47,7 +47,10 @@ fn shrink_to_fit_preserves_live_registrations() {
     space.shrink_to_fit();
     assert_eq!(space.len(), 1_000);
     for addr in 0..1_000_u64 {
-        assert_eq!(space.resolve(&addr), Some(addr.wrapping_mul(3)));
+        assert_eq!(
+            space.resolve(&addr).as_deref().copied(),
+            Some(addr.wrapping_mul(3))
+        );
     }
     for lease in leases {
         lease.release();
@@ -63,7 +66,7 @@ fn shrink_to_fit_preserves_exact_generation_release() {
     for round in 1..=100_u64 {
         let lease = space.claim(7, round).unwrap();
         space.shrink_to_fit();
-        assert_eq!(space.resolve(&7), Some(round));
+        assert_eq!(space.resolve(&7).as_deref().copied(), Some(round));
         lease.release();
         assert_eq!(space.resolve(&7), None);
     }
@@ -136,7 +139,11 @@ fn claim_resolve_release_still_work_after_shrink() {
     let rejected = space.claim(0, 999);
     assert!(matches!(rejected, Err(AddressInUse(0))));
     for addr in 0..1_000_u64 {
-        assert_eq!(space.resolve(&addr), Some(addr), "lost {addr} after shrink");
+        assert_eq!(
+            space.resolve(&addr).as_deref().copied(),
+            Some(addr),
+            "lost {addr} after shrink"
+        );
     }
     for lease in leases.drain(..500) {
         drop(lease);
@@ -144,7 +151,7 @@ fn claim_resolve_release_still_work_after_shrink() {
     space.shrink_to_fit();
     assert_eq!(space.len(), 500);
     for addr in 500..1_000_u64 {
-        assert_eq!(space.resolve(&addr), Some(addr));
+        assert_eq!(space.resolve(&addr).as_deref().copied(), Some(addr));
     }
     for lease in leases {
         drop(lease);
@@ -179,7 +186,7 @@ fn repeated_grow_drain_shrink_cycles_reclaim_memory() {
         assert!(space.is_empty());
         space.shrink_to_fit();
         let re = space.claim(1, 99).unwrap();
-        assert_eq!(space.resolve(&1), Some(99));
+        assert_eq!(space.resolve(&1).as_deref().copied(), Some(99));
         re.release();
     }
 }

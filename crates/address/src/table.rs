@@ -82,7 +82,7 @@ pub(crate) struct Entry<E> {
 }
 
 /// The registration table: a Swiss-style open-addressed map keyed by
-/// address, hashed with splitmix64.
+/// address and using [`AddressHasher`].
 pub(crate) struct OpenTable<A, E> {
     entries: HashMap<A, Entry<E>, BuildHasherDefault<AddressHasher>>,
     // Zero is the permanent exhausted state. Generations never wrap or reuse.
@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn splitmix_distributes_dense_keys_evenly() {
+    fn address_hasher_distributes_dense_keys_evenly() {
         // Dense sequential keys must not cluster: with 65_536 keys and a
         // 131_072-slot table, the longest run of consecutive occupied bins
         // must stay small, otherwise probe chains would grow with

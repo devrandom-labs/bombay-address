@@ -38,6 +38,118 @@ use std::{fmt, hash::Hasher, num::NonZeroU64};
 
 use table::OpenTable;
 
+/// A read-only capability for one resolved endpoint snapshot.
+///
+/// The snapshot remains valid after its registration is released or its
+/// address is reused. Its storage and reclamation mechanism are intentionally
+/// opaque; consumers can access the endpoint through [`core::ops::Deref`] or
+/// [`AsRef`] but cannot reconstruct registration authority from it.
+///
+/// Resolved endpoints are read-only capabilities. The wrapper does not grant
+/// mutable access, construction, destructuring, or registration authority.
+/// As with any shared Rust reference, an endpoint may still expose deliberate
+/// interior-mutability operations through `&self`.
+///
+/// ```compile_fail
+/// use bombay_address::AddressSpace;
+///
+/// let space = AddressSpace::new();
+/// let _lease = space.claim("worker", String::from("endpoint")).unwrap();
+/// let mut endpoint = space.resolve(&"worker").unwrap();
+/// endpoint.push_str("-mutated");
+/// ```
+///
+/// Its private field prevents consumers from constructing or destructuring it:
+///
+/// ```compile_fail
+/// use bombay_address::Resolved;
+///
+/// let endpoint = Resolved(String::from("forged"));
+/// let Resolved(inner) = endpoint;
+/// ```
+///
+/// The endpoint cannot be moved out through the shared dereference:
+///
+/// ```compile_fail
+/// use bombay_address::AddressSpace;
+///
+/// let space = AddressSpace::new();
+/// let _lease = space.claim("worker", String::from("endpoint")).unwrap();
+/// let endpoint = space.resolve(&"worker").unwrap();
+/// let inner: String = *endpoint;
+/// ```
+///
+/// Resolution does not confer release authority:
+///
+/// ```compile_fail
+/// use bombay_address::AddressSpace;
+///
+/// let space = AddressSpace::new();
+/// let _lease = space.claim("worker", String::from("endpoint")).unwrap();
+/// let endpoint = space.resolve(&"worker").unwrap();
+/// endpoint.release();
+/// ```
+///
+/// `Send` and `Sync` are inherited from `E`; the wrapper does not manufacture
+/// either property for an endpoint that lacks it:
+///
+/// ```compile_fail
+/// use bombay_address::Resolved;
+/// use std::rc::Rc;
+///
+/// fn assert_send<T: Send>() {}
+/// assert_send::<Resolved<Rc<()>>>();
+/// ```
+///
+/// ```compile_fail
+/// use bombay_address::Resolved;
+/// use std::cell::Cell;
+///
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<Resolved<Cell<()>>>();
+/// ```
+pub struct Resolved<E>(E);
+
+impl<E: Clone> Clone for Resolved<E> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<E> core::ops::Deref for Resolved<E> {
+    type Target = E;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<E> AsRef<E> for Resolved<E> {
+    fn as_ref(&self) -> &E {
+        self
+    }
+}
+
+impl<E: fmt::Debug> fmt::Debug for Resolved<E> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_tuple("Resolved").field(&self.0).finish()
+    }
+}
+
+impl<E: PartialEq> PartialEq for Resolved<E> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl<E: PartialEq> PartialEq<E> for Resolved<E> {
+    fn eq(&self, other: &E) -> bool {
+        self.as_ref() == other
+    }
+}
+
+impl<E: Eq> Eq for Resolved<E> {}
+
 /// A failed attempt to claim an address that already has a live owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressInUse<A>(pub A);
@@ -280,19 +392,21 @@ where
     A: Eq + Hash,
     E: Clone,
 {
-    /// Resolve a snapshot of the endpoint currently registered at `address`.
+    /// Resolve an opaque snapshot of the endpoint currently registered at
+    /// `address`.
     ///
-    /// The endpoint's `Clone` runs after the read guard is dropped: taking
-    /// the shared handle under the guard is refcount arithmetic only, so a
-    /// re-entrant `Clone` that claims or releases in the address space
-    /// cannot deadlock against the lock.
+    /// The returned handle is an exact snapshot of the resolved registration:
+    /// it remains valid after the lease is released or the address is reused.
+    /// Capturing the registered endpoint handle while holding the read guard
+    /// runs no caller code. The endpoint's [`Clone`] implementation then
+    /// defines the snapshot outside the table lock, so custom clone and drop
+    /// code may safely re-enter the address space.
     #[must_use]
-    pub fn resolve(&self, address: &A) -> Option<E> {
-        let endpoint = {
-            let guard = self.inner.read_entries();
-            guard.get(address).map(|entry| Arc::clone(&entry.endpoint))
-        };
-        endpoint.as_deref().cloned()
+    pub fn resolve(&self, address: &A) -> Option<Resolved<E>> {
+        let guard = self.inner.read_entries();
+        let endpoint = guard.get(address).map(|entry| Arc::clone(&entry.endpoint));
+        drop(guard);
+        endpoint.as_deref().cloned().map(Resolved)
     }
 }
 
@@ -369,14 +483,35 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AddressSpace, ClaimError};
+    use super::{AddressSpace, ClaimError, Resolved};
     use std::collections::HashSet;
+
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn resolved_inherits_positive_auto_traits_from_endpoint() {
+        assert_send_sync::<Resolved<String>>();
+    }
+
+    #[test]
+    fn resolved_preserves_explicit_endpoint_interior_mutability() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = Arc::new(AtomicUsize::new(1));
+        let space = AddressSpace::new();
+        let _lease = space.claim("worker", Arc::clone(&state)).unwrap();
+        let endpoint = space.resolve(&"worker").unwrap();
+
+        endpoint.store(2, Ordering::SeqCst);
+        assert_eq!(state.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn lease_owns_and_releases_one_registration() {
         let space = AddressSpace::new();
         let lease = space.claim(7, "first").unwrap();
-        assert_eq!(space.resolve(&7), Some("first"));
+        assert_eq!(space.resolve(&7).as_deref().copied(), Some("first"));
         assert!(matches!(
             space.try_claim(7, "second"),
             Err(ClaimError::AddressInUse(7))
@@ -384,7 +519,7 @@ mod tests {
         drop(lease);
         assert_eq!(space.resolve(&7), None);
         let replacement = space.claim(7, "second").unwrap();
-        assert_eq!(space.resolve(&7), Some("second"));
+        assert_eq!(space.resolve(&7).as_deref().copied(), Some("second"));
         drop(replacement);
     }
 
@@ -438,6 +573,20 @@ mod tests {
             .claim(String::from("worker"), String::from("replacement"))
             .unwrap();
         assert_ne!(identity, replacement.registration_id());
+    }
+
+    #[test]
+    fn resolved_snapshot_survives_release_and_address_reuse() {
+        let space = AddressSpace::new();
+        let first = space.claim(7, String::from("first")).unwrap();
+        let snapshot = space.resolve(&7).unwrap();
+
+        first.release();
+        let second = space.claim(7, String::from("second")).unwrap();
+
+        assert_eq!(snapshot.as_str(), "first");
+        assert_eq!(space.resolve(&7).unwrap().as_str(), "second");
+        drop(second);
     }
 
     #[test]

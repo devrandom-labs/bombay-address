@@ -171,7 +171,7 @@ fn run_scripted(scripts: &[Vec<ScriptOp>]) -> Vec<Vec<Timed>> {
                             let resolved = space.resolve(&address);
                             let finish = clock.fetch_add(1, Ordering::SeqCst);
                             let kind = match resolved {
-                                Some(v) => OpKind::ResolveHit(v),
+                                Some(v) => OpKind::ResolveHit(*v),
                                 None => OpKind::ResolveMiss,
                             };
                             logs[address as usize].lock().push(Timed { kind, start, finish });

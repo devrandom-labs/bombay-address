@@ -429,3 +429,31 @@ for the generic+reentrancy-safe contract and belong to the actorpass layer
 - At 1M population the design is DRAM-bound (19ns); a population-aware
   capacity hint (`with_capacity`) or a compact two-level layout are the
   only levers, both additive API work with no harness benefit.
+
+## Bombay opaque-resolution integration — 2026-08-14
+
+Workload: Bombay resolves an `IncarnationEndpoint` on every routed delivery
+and peer-observation capture. That endpoint is itself a pair of cloneable,
+reference-counted capabilities. The existing `resolve` first clones the
+table's internal `Arc<E>` under the read guard and then clones `E` outside the
+guard, so one lookup performs the internal snapshot refcount operations plus
+the endpoint's own clone operations.
+
+Invariants: lookup remains generation-snapshot safe; no caller `Clone` or
+`Drop` runs under the table lock; a resolved value remains valid after release
+and same-address reuse; the existing owned-snapshot API remains available.
+
+The standard library's `Arc::clone` is the existing safe shared-ownership
+primitive already required inside the table. A prototype returned an opaque
+capability around that shared registered object. The Bombay-shaped benchmark
+measured 5.57 ns instead of 7.84 ns, but the adversarial cascade suite rejected
+the design: a snapshot then retained ownership fields in the registered
+endpoint and delayed nested-lease retirement. Endpoint-defined `Clone` is a
+semantic boundary, not redundant work.
+
+The accepted API instead wraps the endpoint-defined clone in an opaque,
+read-only `Resolved<E>`. It keeps storage and reclamation private, provides one
+opinionated lookup path, preserves non-owning clone semantics, and prevents
+callers from mutating a resolved snapshot. The measured shared-object result is
+retained only as rejected research evidence and is not claimed by the final
+design.

@@ -76,7 +76,7 @@ fn successful_claim_is_immediately_resolvable_and_releasable() {
 
     // Correct behavior #1: the claimed address is live immediately.
     assert_eq!(
-        space.resolve(lease.address()),
+        space.resolve(lease.address()).as_deref().copied(),
         Some(42),
         "claim returned Ok but resolve(lease.address()) is None: the \
          table stored the clone, the lease holds the desynced original \
@@ -98,7 +98,7 @@ fn successful_claim_is_immediately_resolvable_and_releasable() {
 fn identity_clone_control_claim_resolve_release_exact() {
     let space = AddressSpace::new();
     let lease = space.claim(1_u64, 42_u64).unwrap();
-    assert_eq!(space.resolve(lease.address()), Some(42));
+    assert_eq!(space.resolve(lease.address()).as_deref().copied(), Some(42));
     lease.release();
     assert!(space.is_empty());
 }

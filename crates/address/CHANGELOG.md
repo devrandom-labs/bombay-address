@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Make `AddressSpace::resolve` return the opaque, read-only `Resolved`
+  capability instead of the endpoint value directly, preventing mutation and
+  keeping the internal reclamation mechanism private.
+
+### Fixed
+
+- Correct stale table documentation and test naming that referred to the
+  replaced SplitMix hasher.
+
 ## [0.1.1](https://github.com/devrandom-labs/bombay-address/compare/bombay-address-v0.1.0...bombay-address-v0.1.1) - 2026-08-07
 
 ### Added

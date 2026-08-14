@@ -48,7 +48,7 @@ fn run(ops: &[(String, u8)]) {
             }
             1 => {
                 assert_eq!(
-                    space.resolve(address),
+                    space.resolve(address).as_deref().copied(),
                     state.model.get(address).copied(),
                     "step {step}: resolve({address:?}) diverged"
                 );
@@ -106,12 +106,12 @@ fn zero_padding_collision_pairs_coexist() {
     let padded = format!("a{}", "\0".repeat(7)); // same first chunk after padding
     let first = space.claim(short.clone(), 1_u64).unwrap();
     let second = space.claim(padded.clone(), 2_u64).unwrap();
-    assert_eq!(space.resolve(&short), Some(1));
-    assert_eq!(space.resolve(&padded), Some(2));
+    assert_eq!(space.resolve(&short).as_deref().copied(), Some(1));
+    assert_eq!(space.resolve(&padded).as_deref().copied(), Some(2));
     assert_eq!(space.len(), 2);
     first.release();
     assert_eq!(space.resolve(&short), None);
-    assert_eq!(space.resolve(&padded), Some(2));
+    assert_eq!(space.resolve(&padded).as_deref().copied(), Some(2));
     second.release();
     assert!(space.is_empty());
 }

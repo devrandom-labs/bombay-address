@@ -13,7 +13,7 @@ fn resolution_never_observes_a_partially_published_registration() {
 
         let claim = thread::spawn(move || {
             let lease = writer.claim(1_u64, 99_u64).unwrap();
-            assert_eq!(writer.resolve(&1), Some(99));
+            assert_eq!(writer.resolve(&1).as_deref().copied(), Some(99));
             drop(lease);
         });
         let resolve = thread::spawn(move || {

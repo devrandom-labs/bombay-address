@@ -15,11 +15,15 @@ use bombay_address::AddressSpace;
 let space = AddressSpace::new();
 let lease = space.claim("worker-7", "mailbox")?;
 
-assert_eq!(space.resolve(&"worker-7"), Some("mailbox"));
+assert_eq!(space.resolve(&"worker-7").as_deref().copied(), Some("mailbox"));
 drop(lease);
 assert_eq!(space.resolve(&"worker-7"), None);
 # Ok::<(), bombay_address::AddressInUse<&str>>(())
 ```
+
+`AddressSpace::resolve` returns an opaque `Resolved<E>` capability. It avoids
+exposing Address's storage or reclamation mechanism while preserving the
+endpoint-defined `Clone` semantics that construct each non-owning snapshot.
 
 The `Lease` is the authority to release one exact registration generation.
 Dropping an old lease cannot remove a newer owner. Resolved endpoints are typed

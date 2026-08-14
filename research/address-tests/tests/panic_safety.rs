@@ -73,7 +73,10 @@ fn hash_panic_during_claim_leaves_space_consistent() {
     assert!(result.is_err(), "injected panic must propagate");
     // The space is unharmed: claim, resolve, release all work.
     let lease = space.claim(SometimesPanic::good(1), 20_u64).unwrap();
-    assert_eq!(space.resolve(&SometimesPanic::good(1)), Some(20));
+    assert_eq!(
+        space.resolve(&SometimesPanic::good(1)).as_deref().copied(),
+        Some(20)
+    );
     assert_eq!(space.len(), 2);
     lease.release();
     seed.release();
@@ -97,7 +100,10 @@ fn hash_panic_during_claim_insert_leaves_no_ghost_registration() {
     assert!(result.is_err());
     // No ghost: the address is free, re-claim works.
     let lease = space.claim(SometimesPanic::good(7), 30_u64).unwrap();
-    assert_eq!(space.resolve(&SometimesPanic::good(7)), Some(30));
+    assert_eq!(
+        space.resolve(&SometimesPanic::good(7)).as_deref().copied(),
+        Some(30)
+    );
     lease.release();
     seed.release();
     assert!(space.is_empty());
@@ -224,7 +230,7 @@ fn reentrant_address_clone_during_claim_does_not_deadlock() {
             id: 1,
             reenter: false,
             space: Arc::clone(&space)
-        }),
+        }).as_deref().copied(),
         Some(9)
     );
     lease.release();
@@ -304,7 +310,7 @@ fn eq_panic_during_claim_leaves_space_consistent() {
         space.resolve(&EqPanic {
             id: 1,
             armed: Arc::clone(&armed)
-        }),
+        }).as_deref().copied(),
         Some(20)
     );
     assert_eq!(space.len(), 2);
@@ -343,7 +349,7 @@ fn eq_panic_during_resolve_leaves_space_consistent() {
         space.resolve(&EqPanic {
             id: 7,
             armed: Arc::clone(&armed)
-        }),
+        }).as_deref().copied(),
         Some(70)
     );
     lease.release();
