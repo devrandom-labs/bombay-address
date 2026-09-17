@@ -1,0 +1,35 @@
+# cargo-deny scans dependencies for known advisories, license violations,
+# and untrusted sources — the same gate as the flake's address-deny check,
+# but surfaced as its own always-on CI job (and weekly, so advisories
+# published after the last code change still fail loudly).
+name: Deny
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  schedule:
+    # Weekly advisories sweep (fixed time; Mondays 05:37 UTC).
+    - cron: "37 5 * * 1"
+
+concurrency:
+  group: deny-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check advisories, bans, licenses, and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

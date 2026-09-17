@@ -40,5 +40,9 @@ jobs:
           purge-prefixes: nix-${{ runner.os }}-
           purge-created: 0
           purge-primary-key: never
+      # `nix flake check` builds every check in flake.nix. `-L`
+      # (--print-build-logs) streams FULL build logs instead of nix's
+      # truncated "last 25 lines" on a failed derivation — essential for
+      # diagnosing a failing test.
       - name: Flake Check
-        run: nix flake check
+        run: nix flake check -L
