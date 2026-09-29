@@ -1,0 +1,234 @@
+Benchmark evidence: Apple M4 Pro, Rust 1.96.0, Nix development shell.
+Old binaries: baseline 66cb4e5, new: reservation implementation.
+The first two pilots overlapped builds and are retained as noisy observations.
+Final A/B/A runs occurred sequentially after build/fuzz/Miri completion.
+
+=== baseline.log ===
+   Compiling bombay-address v0.2.0 (/Users/joel/Code/devrandom/bombay-address/crates/address)
+    Finished `bench` profile [optimized] target(s) in 1.53s
+     Running benches/address_space.rs (target/release/deps/address_space-478f58f44fc983fc)
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 3.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 5.0000 s (1.1B iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.6655 ns 4.6882 ns 4.7110 ns]
+                        thrpt:  [212.27 Melem/s 213.30 Melem/s 214.34 Melem/s]
+Found 10 outliers among 100 measurements (10.00%)
+  4 (4.00%) low mild
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 3.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 5.0000 s (870M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [5.7743 ns 5.7986 ns 5.8234 ns]
+                        thrpt:  [171.72 Melem/s 172.46 Melem/s 173.18 Melem/s]
+Found 11 outliers among 100 measurements (11.00%)
+  1 (1.00%) low mild
+  9 (9.00%) high mild
+  1 (1.00%) high severe
+
+
+
+=== bench-after.log ===
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling bombay-address v0.3.0 (/Users/joel/Code/devrandom/bombay-address/crates/address)
+    Finished `bench` profile [optimized] target(s) in 2.31s
+     Running benches/address_space.rs (target/release/deps/address_space-86cfc1763a6ad014)
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 3.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 5.0000 s (885M iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.9628 ns 4.9799 ns 4.9970 ns]
+                        thrpt:  [200.12 Melem/s 200.81 Melem/s 201.50 Melem/s]
+                 change:
+                        time:   [+5.4824% +6.0721% +6.6760%] (p = 0.00 < 0.05)
+                        thrpt:  [−6.2582% −5.7245% −5.1974%]
+                        Performance has regressed.
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) low severe
+  1 (1.00%) high mild
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 3.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 5.0000 s (836M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [5.9957 ns 6.0283 ns 6.0588 ns]
+                        thrpt:  [165.05 Melem/s 165.88 Melem/s 166.79 Melem/s]
+                 change:
+                        time:   [+2.6079% +3.3021% +3.9692%] (p = 0.00 < 0.05)
+                        thrpt:  [−3.8177% −3.1965% −2.5416%]
+                        Performance has regressed.
+
+
+
+=== bench-final.log ===
+   Compiling bombay-address v0.3.0 (/Users/joel/Code/devrandom/bombay-address/crates/address)
+    Finished `bench` profile [optimized] target(s) in 2.30s
+     Running benches/address_space.rs (target/release/deps/address_space-86cfc1763a6ad014)
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 3.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 5.0000 s (1.0B iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.7950 ns 4.8207 ns 4.8456 ns]
+                        thrpt:  [206.37 Melem/s 207.44 Melem/s 208.55 Melem/s]
+                 change:
+                        time:   [+10.671% +11.618% +12.606%] (p = 0.00 < 0.05)
+                        thrpt:  [−11.195% −10.408% −9.6421%]
+                        Performance has regressed.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) low mild
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 3.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 5.0000 s (819M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [6.0616 ns 6.1066 ns 6.1511 ns]
+                        thrpt:  [162.57 Melem/s 163.76 Melem/s 164.97 Melem/s]
+                 change:
+                        time:   [+12.041% +12.911% +13.695%] (p = 0.00 < 0.05)
+                        thrpt:  [−12.046% −11.435% −10.747%]
+                        Performance has regressed.
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high mild
+
+Benchmarking claim_release
+Benchmarking claim_release: Warming up for 3.0000 s
+Benchmarking claim_release: Collecting 100 samples in estimated 5.0001 s (213M iterations)
+Benchmarking claim_release: Analyzing
+claim_release           time:   [23.540 ns 23.678 ns 23.804 ns]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) low mild
+
+Benchmarking reserve_drop
+Benchmarking reserve_drop: Warming up for 3.0000 s
+Benchmarking reserve_drop: Collecting 100 samples in estimated 5.0001 s (282M iterations)
+Benchmarking reserve_drop: Analyzing
+reserve_drop            time:   [16.912 ns 17.117 ns 17.315 ns]
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) low mild
+
+Benchmarking reserve_publish_release
+Benchmarking reserve_publish_release: Warming up for 3.0000 s
+Benchmarking reserve_publish_release: Collecting 100 samples in estimated 5.0000 s (209M iterations)
+Benchmarking reserve_publish_release: Analyzing
+reserve_publish_release time:   [23.956 ns 24.111 ns 24.273 ns]
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high mild
+
+Benchmarking resolve_reserved
+Benchmarking resolve_reserved: Warming up for 3.0000 s
+Benchmarking resolve_reserved: Collecting 100 samples in estimated 5.0000 s (1.4B iterations)
+Benchmarking resolve_reserved: Analyzing
+resolve_reserved        time:   [3.6230 ns 3.6792 ns 3.7316 ns]
+Found 14 outliers among 100 measurements (14.00%)
+  10 (10.00%) low severe
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+
+Benchmarking reserve_duplicate
+Benchmarking reserve_duplicate: Warming up for 3.0000 s
+Benchmarking reserve_duplicate: Collecting 100 samples in estimated 5.0000 s (1.5B iterations)
+Benchmarking reserve_duplicate: Analyzing
+reserve_duplicate       time:   [3.2893 ns 3.3003 ns 3.3131 ns]
+Found 14 outliers among 100 measurements (14.00%)
+  2 (2.00%) low mild
+  5 (5.00%) high mild
+  7 (7.00%) high severe
+
+
+
+=== bench-old-a.log ===
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 1.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 3.0000 s (626M iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.7548 ns 4.7763 ns 4.7973 ns]
+                        thrpt:  [208.45 Melem/s 209.37 Melem/s 210.31 Melem/s]
+                 change:
+                        time:   [−1.5260% −1.0179% −0.4212%] (p = 0.00 < 0.05)
+                        thrpt:  [+0.4230% +1.0284% +1.5496%]
+                        Change within noise threshold.
+Found 9 outliers among 100 measurements (9.00%)
+  1 (1.00%) low severe
+  6 (6.00%) low mild
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 1.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 3.0000 s (508M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [5.8697 ns 5.8939 ns 5.9225 ns]
+                        thrpt:  [168.85 Melem/s 169.67 Melem/s 170.37 Melem/s]
+                 change:
+                        time:   [−3.1297% −2.3082% −1.4869%] (p = 0.00 < 0.05)
+                        thrpt:  [+1.5093% +2.3627% +3.2308%]
+                        Performance has improved.
+Found 14 outliers among 100 measurements (14.00%)
+  1 (1.00%) low severe
+  1 (1.00%) low mild
+  7 (7.00%) high mild
+  5 (5.00%) high severe
+
+
+
+=== bench-new.log ===
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 1.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 3.0000 s (634M iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.7054 ns 4.7331 ns 4.7604 ns]
+                        thrpt:  [210.07 Melem/s 211.28 Melem/s 212.52 Melem/s]
+                 change:
+                        time:   [−1.3362% −0.7085% −0.1102%] (p = 0.02 < 0.05)
+                        thrpt:  [+0.1103% +0.7136% +1.3543%]
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) low mild
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 1.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 3.0000 s (516M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [5.8264 ns 5.8482 ns 5.8745 ns]
+                        thrpt:  [170.23 Melem/s 170.99 Melem/s 171.63 Melem/s]
+                 change:
+                        time:   [−1.1160% −0.4880% +0.2038%] (p = 0.16 > 0.05)
+                        thrpt:  [−0.2034% +0.4904% +1.1286%]
+                        No change in performance detected.
+Found 10 outliers among 100 measurements (10.00%)
+  10 (10.00%) high mild
+
+
+
+=== bench-old-b.log ===
+Benchmarking resolve_hit/1024
+Benchmarking resolve_hit/1024: Warming up for 1.0000 s
+Benchmarking resolve_hit/1024: Collecting 100 samples in estimated 3.0000 s (633M iterations)
+Benchmarking resolve_hit/1024: Analyzing
+resolve_hit/1024        time:   [4.7578 ns 4.7994 ns 4.8417 ns]
+                        thrpt:  [206.54 Melem/s 208.36 Melem/s 210.18 Melem/s]
+                 change:
+                        time:   [−1.1457% −0.3893% +0.4081%] (p = 0.33 > 0.05)
+                        thrpt:  [−0.4064% +0.3908% +1.1590%]
+                        No change in performance detected.
+Found 21 outliers among 100 measurements (21.00%)
+  2 (2.00%) low severe
+  9 (9.00%) low mild
+  5 (5.00%) high mild
+  5 (5.00%) high severe
+Benchmarking resolve_hit/65536
+Benchmarking resolve_hit/65536: Warming up for 1.0000 s
+Benchmarking resolve_hit/65536: Collecting 100 samples in estimated 3.0000 s (510M iterations)
+Benchmarking resolve_hit/65536: Analyzing
+resolve_hit/65536       time:   [5.8576 ns 5.8776 ns 5.8995 ns]
+                        thrpt:  [169.51 Melem/s 170.14 Melem/s 170.72 Melem/s]
+                 change:
+                        time:   [−1.1305% −0.5299% +0.0380%] (p = 0.08 > 0.05)
+                        thrpt:  [−0.0380% +0.5328% +1.1434%]
+                        No change in performance detected.
+Found 17 outliers among 100 measurements (17.00%)
+  6 (6.00%) low mild
+  9 (9.00%) high mild
+  2 (2.00%) high severe

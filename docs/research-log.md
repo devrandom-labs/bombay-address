@@ -457,3 +457,8 @@ opinionated lookup path, preserves non-owning clone semantics, and prevents
 callers from mutating a resolved snapshot. The measured shared-object result is
 retained only as rejected research evidence and is not claimed by the final
 design.
+
+## Affine address reservations — 2026-09-29
+
+The v0.3.0 design comparison, invariants, benchmarks, and reproducible
+verification are recorded in [reservations.md](reservations.md).

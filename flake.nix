@@ -36,7 +36,7 @@
         commonArgs = {
           inherit src;
           pname = "bombay-address";
-          version = "0.1.0";
+          version = (builtins.fromTOML (builtins.readFile ./crates/address/Cargo.toml)).package.version;
           strictDeps = true;
         };
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
@@ -44,7 +44,7 @@
       {
         checks = {
           address-build = craneLib.buildPackage (commonArgs // { inherit cargoArtifacts; });
-          address-fmt = craneLib.cargoFmt { inherit src; };
+          address-fmt = craneLib.cargoFmt commonArgs;
           address-clippy = craneLib.cargoClippy (
             commonArgs
             // {
@@ -54,9 +54,18 @@
           );
           address-nextest = craneLib.cargoNextest (commonArgs // { inherit cargoArtifacts; });
           address-doctest = craneLib.cargoDocTest (commonArgs // { inherit cargoArtifacts; });
+          address-loom = craneLib.cargoTest (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+              RUSTFLAGS = "--cfg loom";
+              LOOM_MAX_PREEMPTIONS = "3";
+              cargoTestExtraArgs = "--workspace --test loom --test loom_model";
+            }
+          );
           address-doc = craneLib.cargoDoc (commonArgs // { inherit cargoArtifacts; });
-          address-audit = craneLib.cargoAudit { inherit src advisory-db; };
-          address-deny = craneLib.cargoDeny { inherit src; };
+          address-audit = craneLib.cargoAudit (commonArgs // { inherit advisory-db; });
+          address-deny = craneLib.cargoDeny commonArgs;
         };
         packages = {
           default = self.checks.${system}.address-build;
@@ -70,6 +79,17 @@
           );
         };
         formatter = pkgs.nixfmt;
+        devShells.miri = pkgs.mkShell {
+          packages = [
+            (fenix.packages.${system}.complete.withComponents [
+              "cargo"
+              "rustc"
+              "rust-src"
+              "miri"
+            ])
+            pkgs.cargo-fuzz
+          ];
+        };
         devShells.default = craneLib.devShell {
           checks = self.checks.${system};
           packages = with pkgs; [

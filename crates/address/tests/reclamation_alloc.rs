@@ -1,11 +1,12 @@
 //! Isolated counting-allocator measurement for explicit reclamation.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 struct Counting;
 
 static LIVE: AtomicIsize = AtomicIsize::new(0);
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -14,6 +15,7 @@ unsafe impl GlobalAlloc for Counting {
             reason = "Layout sizes stay well below isize::MAX on this test"
         )]
         LIVE.fetch_add(layout.size() as isize, Ordering::Relaxed);
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         unsafe { System.alloc(layout) }
     }
     #[allow(clippy::cast_possible_wrap, reason = "same as alloc")]
@@ -33,7 +35,7 @@ fn live_bytes() -> isize {
 use bombay_address::AddressSpace;
 
 #[test]
-fn explicit_shrink_returns_peak_capacity_while_drain_retains_it() {
+fn explicit_shrink_and_reservations_preserve_allocation_contracts() {
     // Warm up one-time allocations (test harness, thread-locals).
     {
         let warm = AddressSpace::<u64, u64>::new();
@@ -79,4 +81,19 @@ fn explicit_shrink_returns_peak_capacity_while_drain_retains_it() {
         after_shrink <= 1_024 * 1024,
         "after explicit shrink, {after_shrink} bytes retained (bound: 1 MiB)"
     );
+
+    // Retain table capacity, then measure integer-key reservation paths in
+    // this same isolated test process so parallel tests cannot skew counts.
+    drop(space.try_claim(0, 0).unwrap());
+    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let reserved = space.try_reserve(0).unwrap();
+    assert!(space.resolve(&0).is_none());
+    assert!(space.try_reserve(0).is_err());
+    assert!(space.try_claim(0, 1).is_err());
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), before);
+    let lease = reserved.publish(42);
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), before + 1);
+    drop(lease);
+    drop(space.try_reserve(0).unwrap());
+    assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), before + 1);
 }

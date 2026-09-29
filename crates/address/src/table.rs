@@ -69,7 +69,7 @@ pub(crate) fn hash_key<A: Hash>(address: &A) -> u64 {
 }
 
 /// One live registration: the registration generation and the typed
-/// endpoint. The address is the hash map key.
+/// endpoint, or `None` while reserved. The address is the hash map key.
 ///
 /// The endpoint is stored behind an [`Arc`] so that [`resolve`](crate::AddressSpace::resolve)
 /// can take a reference-counted handle under the read guard and run the
@@ -78,7 +78,7 @@ pub(crate) fn hash_key<A: Hash>(address: &A) -> u64 {
 /// that code re-entered the address space.
 pub(crate) struct Entry<E> {
     pub(crate) generation: u64,
-    pub(crate) endpoint: Arc<E>,
+    pub(crate) endpoint: Option<Arc<E>>,
 }
 
 /// The registration table: a Swiss-style open-addressed map keyed by
@@ -126,14 +126,26 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
 
     /// Insert a registration. The caller must have verified `address` is
     /// not already present.
-    pub(crate) fn insert(&mut self, address: A, generation: u64, endpoint: E) {
+    pub(crate) fn insert(&mut self, address: A, generation: u64, endpoint: Option<Arc<E>>) {
         self.entries.insert(
             address,
             Entry {
                 generation,
-                endpoint: Arc::new(endpoint),
+                endpoint,
             },
         );
+    }
+
+    /// Fill the entry owned by an affine reservation. Ownership guarantees
+    /// that the entry still exists and is unpublished; no collision check,
+    /// generation allocation, or table insertion is needed.
+    pub(crate) fn publish(&mut self, address: &A, endpoint: Arc<E>) {
+        let entry = self
+            .entries
+            .get_mut(address)
+            .expect("reservation owns its entry");
+        debug_assert!(entry.endpoint.is_none());
+        entry.endpoint = Some(endpoint);
     }
 
     /// Reclaim excess backing-table capacity without disturbing any live
@@ -151,7 +163,11 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
     /// the [`Arc`]) and the address's `Drop` must not run while the lock
     /// is held, or re-entrant destructors would deadlock.
     #[must_use]
-    pub(crate) fn remove_if(&mut self, address: &A, generation: u64) -> Option<(A, Arc<E>)> {
+    pub(crate) fn remove_if(
+        &mut self,
+        address: &A,
+        generation: u64,
+    ) -> Option<(A, Option<Arc<E>>)> {
         if self
             .entries
             .get(address)
@@ -168,17 +184,17 @@ impl<A: Eq + Hash, E> OpenTable<A, E> {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenTable, hash_key};
+    use super::{Arc, OpenTable, hash_key};
     use std::num::NonZeroU64;
 
     #[test]
     fn insert_get_roundtrip() {
         let mut table = OpenTable::new();
-        table.insert(7_u64, 1, 10_u64);
+        table.insert(7_u64, 1, Some(Arc::new(10_u64)));
         assert_eq!(table.len(), 1);
         let entry = table.get(&7).expect("present");
         assert_eq!(entry.generation, 1);
-        assert_eq!(entry.endpoint.as_ref(), &10);
+        assert_eq!(entry.endpoint.as_deref().unwrap(), &10);
         assert!(table.get(&8).is_none());
     }
 
@@ -186,7 +202,7 @@ mod tests {
     fn scattered_removal_preserves_all_remaining_lookups() {
         let mut table = OpenTable::new();
         for key in 0..4_000_u64 {
-            table.insert(key, key + 1, key.wrapping_mul(3));
+            table.insert(key, key + 1, Some(Arc::new(key.wrapping_mul(3))));
         }
         for key in 0..4_000_u64 {
             if key % 10 != 0 {
@@ -197,7 +213,7 @@ mod tests {
             if key % 10 == 0 {
                 let entry = table.get(&key).expect("survivor must be found");
                 assert_eq!(entry.generation, key + 1);
-                assert_eq!(entry.endpoint.as_ref(), &key.wrapping_mul(3));
+                assert_eq!(entry.endpoint.as_deref().unwrap(), &key.wrapping_mul(3));
             } else {
                 assert!(table.get(&key).is_none(), "deleted key {key} still present");
             }
@@ -208,9 +224,12 @@ mod tests {
     #[test]
     fn stale_generation_never_removes_newer_registration() {
         let mut table = OpenTable::new();
-        table.insert(1_u64, 1, "first");
+        table.insert(1_u64, 1, Some(Arc::new("first")));
         assert!(table.remove_if(&1, 1_000).is_none());
-        assert_eq!(table.get(&1).expect("kept").endpoint.as_ref(), &"first");
+        assert_eq!(
+            table.get(&1).expect("kept").endpoint.as_deref().unwrap(),
+            &"first"
+        );
         assert!(table.remove_if(&1, 1).is_some());
         assert!(table.get(&1).is_none());
     }
@@ -228,13 +247,13 @@ mod tests {
     fn growth_rehashes_without_losing_entries() {
         let mut table = OpenTable::new();
         for key in 0..10_000_u64 {
-            table.insert(key, key + 1, key * 7);
+            table.insert(key, key + 1, Some(Arc::new(key * 7)));
         }
         assert_eq!(table.len(), 10_000);
         for key in 0..10_000_u64 {
             let entry = table.get(&key).expect("present after growth");
             assert_eq!(entry.generation, key + 1);
-            assert_eq!(entry.endpoint.as_ref(), &(key * 7));
+            assert_eq!(entry.endpoint.as_deref().unwrap(), &(key * 7));
         }
         for key in 0..10_000_u64 {
             if key % 3 == 0 {
@@ -246,7 +265,12 @@ mod tests {
                 assert!(table.get(&key).is_none());
             } else {
                 assert_eq!(
-                    table.get(&key).expect("survivor").endpoint.as_ref(),
+                    table
+                        .get(&key)
+                        .expect("survivor")
+                        .endpoint
+                        .as_deref()
+                        .unwrap(),
                     &(key * 7)
                 );
             }

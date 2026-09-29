@@ -2,3 +2,7 @@ target/
 mutants.out/
 mutants.out.old/
 .direnv/
+
+/result
+/research/address-tests/fuzz/corpus/
+/research/address-tests/fuzz/artifacts/

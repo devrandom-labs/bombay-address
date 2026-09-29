@@ -828,3 +828,17 @@ every value at every instant).
   build configurations; no executed test can cover it.
 - Linearizability checker: histories capped at 63 ops (bitmask DP);
   single hot address; claim/release/resolve only.
+
+
+## Reservation release campaign — 2026-09-29
+
+The new reservation model and coverage-guided libFuzzer target extend the
+historical claim/resolve/release campaign. See
+[the release report](../../docs/reservations.md) for executed commands, results,
+performance evidence, and bounds. This campaign also repairs the stale detached
+Loom assertions for `Resolved`, pins the current path dependency in both
+lockfiles, and provides the documented Miri shell in `flake.nix`.
+
+Earlier notes about unavailable generation-exhaustion coverage, deterministic
+fuzzing only, and missing Miri support describe the historical campaign; the new
+release includes boundary unit tests, real libFuzzer execution, and Miri.
