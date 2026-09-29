@@ -6,12 +6,13 @@ description: Ownership guarantees and the adversarial verification suite.
 # Correctness
 
 The address space guarantees at most one live owner per address, linearizable
-claim/resolve/release operations, and generation-safe release. Endpoint clone
+reserve/claim/resolve/publish/release operations, and generation-safe release. Endpoint clone
 and drop callbacks execute outside the table lock.
 
 Every successful registration has a distinct process-local identity. Identity
 generations never wrap or recycle: after exhausting its generation space, an
-address space permanently rejects new claims. The identity includes an opaque
+address space permanently rejects new claims and reservations for free addresses.
+Existing reservations can still publish without issuing a new identity. The identity includes an opaque
 address-space scope, so independent spaces cannot produce equal registration
 identities.
 
@@ -19,3 +20,12 @@ The retained `research/address-tests/` workspace contains reference-model
 property tests, bounded Loom models, deterministic stress, allocation-retention
 checks, Miri ownership checks, fuzz targets, and replay corpora. See its
 `VERIFICATION.md` for commands, bounds, and historical findings.
+
+Reservation ownership transfers directly to a lease on publication. Both use
+the same generation-checked removal path. Resolved snapshots never grant
+ownership, and unpublished reservations never produce snapshots. Table growth
+and shrinking preserve both states.
+
+The Nix gate includes the workspace Loom models. The pinned `nix develop .#miri`
+shell provides Miri and cargo-fuzz. The reservation release report in
+`docs/reservations.md` records the checked bounds and performance evidence.

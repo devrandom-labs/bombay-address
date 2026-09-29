@@ -2,11 +2,11 @@
 
 `bombay-address` is a typed concurrent address space with exclusive,
 generation-safe ownership. The published package is `bombay-address`; its Rust
-library name is `address`.
+library name is `bombay_address`.
 
 ```toml
 [dependencies]
-bombay-address = "0.1"
+bombay-address = "0.3"
 ```
 
 ```rust
@@ -32,6 +32,34 @@ snapshots, and user `Clone`/`Drop` code runs outside the table lock.
 `Lease::registration_id()` returns an opaque identity for that exact local
 registration. It is independent of the address type, process-local, and grants
 no ownership, release authority, authentication, or durable identity.
+
+## Reserve before publishing
+
+```rust
+use bombay_address::AddressSpace;
+
+let space = AddressSpace::new();
+let reserved = space.try_reserve("worker-7")?;
+let identity = reserved.registration_id();
+assert!(space.resolve(&"worker-7").is_none());
+
+let lease = reserved.publish("mailbox");
+assert_eq!(lease.registration_id(), identity);
+assert_eq!(space.resolve(&"worker-7").as_deref(), Some(&"mailbox"));
+drop(lease);
+assert!(space.is_empty());
+# Ok::<(), bombay_address::ClaimError<&str>>(())
+```
+
+A `Reservation` blocks claims and reservations at its address. It cannot be
+cloned; dropping it releases its exact generation. `publish` consumes it and
+returns the existing `Lease` type without a second collision check, address
+clone, table insertion, or generation allocation. Publication can succeed even
+after registration identities are exhausted. `len()` counts both reservations
+and published registrations; only published endpoints can be resolved.
+
+`try_reserve` and `try_claim` return `ClaimError` with the original address.
+An occupied address returns `AddressInUse` even after identity exhaustion.
 
 ## Verification
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-29
+
+### Added
+
+- `AddressSpace::try_reserve` and affine `Reservation` ownership: reserve an
+  address without exposing an endpoint, then consume the reservation with
+  `publish` to obtain a `Lease` for the same generation.
+- Reservations exclude both claims and reservations, count toward `len`, and
+  release their exact generation on drop. Publication remains available after
+  identity exhaustion and needs no second collision check or identity.
+- Reservation race models, property/stress/fuzz/Miri coverage, and benchmarks.
+- Loom in the Nix release gate and a pinned nightly Miri/fuzz development shell.
+
 ## [0.2.0](https://github.com/devrandom-labs/bombay-address/compare/bombay-address-v0.1.1...bombay-address-v0.2.0) - 2026-08-14
 
 ### Other

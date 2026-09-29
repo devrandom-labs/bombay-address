@@ -7,14 +7,15 @@ description: Typed, generation-safe address ownership for Rust.
 
 Bombay Address maps application-defined address values to typed endpoints. A
 successful claim returns a `Lease`; that lease exclusively owns one registration
-generation and releases it on drop.
+generation and releases it on drop. Use `try_reserve` to acquire an address
+before constructing its endpoint, then consume the reservation with `publish`.
 
 ```rust
 use bombay_address::AddressSpace;
 
 let routes = AddressSpace::new();
 let lease = routes.claim("jobs/thumbnail", "mailbox-1")?;
-assert_eq!(routes.resolve(&"jobs/thumbnail"), Some("mailbox-1"));
+assert_eq!(routes.resolve(&"jobs/thumbnail").as_deref(), Some(&"mailbox-1"));
 drop(lease);
 # Ok::<(), bombay_address::AddressInUse<&str>>(())
 ```

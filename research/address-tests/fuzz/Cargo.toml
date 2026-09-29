@@ -104,3 +104,9 @@ name = "address_wide_reentrant"
 path = "fuzz_targets/address_wide_reentrant.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "address_reservations"
+path = "fuzz_targets/address_reservations.rs"
+test = false
+doc = false

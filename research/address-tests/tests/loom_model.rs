@@ -37,10 +37,10 @@ fn three_claimants_exactly_one_owner() {
             .find(|(_, r)| r.is_ok())
             .map(|(i, _)| (i as u64) + 1)
             .unwrap();
-        assert_eq!(space.resolve(&0), Some(winner));
+        assert_eq!(space.resolve(&0).as_deref().copied(), Some(winner));
         // The winning lease is dropped at scope end; the space drains.
         drop(results);
-        assert_eq!(space.resolve(&0), None);
+        assert_eq!(space.resolve(&0).as_deref().copied(), None);
     });
 }
 
@@ -66,7 +66,7 @@ fn two_readers_observe_only_current_or_absent_during_reclaim() {
             .map(|_| {
                 let space = Arc::clone(&space);
                 thread::spawn(move || {
-                    if let Some(endpoint) = space.resolve(&0) {
+                    if let Some(endpoint) = space.resolve(&0).as_deref().copied() {
                         assert!(
                             endpoint == 10 || endpoint == 20,
                             "torn or foreign endpoint observed: {endpoint}"
@@ -79,7 +79,7 @@ fn two_readers_observe_only_current_or_absent_during_reclaim() {
         for reader in readers {
             reader.join().unwrap();
         }
-        assert_eq!(space.resolve(&0), None);
+        assert_eq!(space.resolve(&0).as_deref().copied(), None);
     });
 }
 
@@ -95,14 +95,14 @@ fn resolve_overlapping_final_release_returns_snapshot_or_absence() {
         let releaser = thread::spawn(move || drop(lease));
         let resolver = {
             let space = Arc::clone(&space);
-            thread::spawn(move || match space.resolve(&0) {
+            thread::spawn(move || match space.resolve(&0).as_deref().copied() {
                 Some(77) | None => {}
                 Some(other) => panic!("impossible endpoint {other}"),
             })
         };
         releaser.join().unwrap();
         resolver.join().unwrap();
-        assert_eq!(space.resolve(&0), None);
+        assert_eq!(space.resolve(&0).as_deref().copied(), None);
         assert!(space.is_empty());
     });
 }
@@ -168,7 +168,7 @@ fn poisoned_write_lock_recovers_and_stays_consistent() {
             panic: false,
         };
         let lease = space.claim(good.clone(), 20_u64).unwrap();
-        assert_eq!(space.resolve(&good), Some(20));
+        assert_eq!(space.resolve(&good).as_deref().copied(), Some(20));
         lease.release();
         assert!(space.is_empty());
     });
@@ -194,12 +194,12 @@ fn release_racing_claim_leaves_exact_new_owner_or_empty() {
 
         match outcome {
             Ok(lease) => {
-                assert_eq!(space.resolve(&0), Some(20));
+                assert_eq!(space.resolve(&0).as_deref().copied(), Some(20));
                 drop(lease);
                 assert!(space.is_empty());
             }
             Err(_) => {
-                assert_eq!(space.resolve(&0), None);
+                assert_eq!(space.resolve(&0).as_deref().copied(), None);
                 assert!(space.is_empty());
             }
         }
@@ -232,10 +232,10 @@ fn two_address_three_thread_interleaving_has_no_cross_bleed() {
         let reader = {
             let space = Arc::clone(&space);
             thread::spawn(move || {
-                if let Some(v) = space.resolve(&1) {
+                if let Some(v) = space.resolve(&1).as_deref().copied() {
                     assert_eq!(v, 100, "address 1 bled: {v}");
                 }
-                if let Some(v) = space.resolve(&2) {
+                if let Some(v) = space.resolve(&2).as_deref().copied() {
                     assert!(v == 200 || v == 300, "address 2 bled: {v}");
                 }
             })
@@ -269,8 +269,8 @@ fn four_claimants_two_addresses_exact_ownership() {
         }
         // Exactly one winner per address.
         assert_eq!(leases.len(), 2);
-        let winner0 = space.resolve(&0).unwrap();
-        let winner1 = space.resolve(&1).unwrap();
+        let winner0 = space.resolve(&0).as_deref().copied().unwrap();
+        let winner1 = space.resolve(&1).as_deref().copied().unwrap();
         assert!(winner0 == 10 || winner0 == 30, "address 0 winner {winner0}");
         assert!(winner1 == 20 || winner1 == 40, "address 1 winner {winner1}");
         for lease in leases {

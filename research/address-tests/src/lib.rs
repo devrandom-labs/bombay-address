@@ -1809,3 +1809,5 @@ pub fn fuzz_entry_wide_reentrant(data: &[u8]) {
     }
     assert!(space.is_empty() && model.is_empty());
 }
+
+pub mod reservations;

@@ -21,5 +21,25 @@ fn resolve_hit(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, resolve_hit);
+fn reservation_lifecycle(c: &mut Criterion) {
+    let space = AddressSpace::<u64, u64>::new();
+    c.bench_function("claim_release", |b| {
+        b.iter(|| drop(space.try_claim(1, 42).unwrap()));
+    });
+    c.bench_function("reserve_drop", |b| {
+        b.iter(|| drop(space.try_reserve(1).unwrap()));
+    });
+    c.bench_function("reserve_publish_release", |b| {
+        b.iter(|| drop(space.try_reserve(1).unwrap().publish(42)));
+    });
+    let _reserved = space.try_reserve(1).unwrap();
+    c.bench_function("resolve_reserved", |b| {
+        b.iter(|| std::hint::black_box(space.resolve(&1)));
+    });
+    c.bench_function("reserve_duplicate", |b| {
+        b.iter(|| std::hint::black_box(space.try_reserve(1).err()));
+    });
+}
+
+criterion_group!(benches, resolve_hit, reservation_lifecycle);
 criterion_main!(benches);

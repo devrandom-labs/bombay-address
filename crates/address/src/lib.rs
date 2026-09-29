@@ -11,8 +11,8 @@
 //!   `a.hash(…)` and `b.hash(…)` must write the same bytes to the
 //!   hasher (the `Hash` trait requirement).
 //! - **No panic.** `Hash` and `Eq` must never panic. A panicking `Hash`
-//!   or `Eq` during `claim`, `resolve`, or `release` may leave the
-//!   address space in an inconsistent state.
+//!   or `Eq` during acquisition, publication, resolution, or release may
+//!   leave the address space in an inconsistent state.
 //! - **No re-entrancy.** `Hash` and `Eq` must not call any method of the
 //!   *same* `AddressSpace` from which they were invoked. The hash-table
 //!   probe runs under the table's write or read guard, and
@@ -154,10 +154,10 @@ impl<E: Eq> Eq for Resolved<E> {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressInUse<A>(pub A);
 
-/// The reason an address claim failed.
+/// The reason an address claim or reservation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClaimError<A> {
-    /// An owner is already registered at the returned address.
+    /// The returned address is already claimed or reserved.
     AddressInUse(A),
     /// This address space has issued every available registration identity.
     ///
@@ -296,13 +296,13 @@ impl<A, E> AddressSpace<A, E> {
         self.inner.scope.clone()
     }
 
-    /// Return the number of live registrations.
+    /// Return the number of occupied addresses, including unpublished reservations.
     #[must_use]
     pub fn len(&self) -> usize {
         self.inner.read_entries().len()
     }
 
-    /// Return whether the address space is empty.
+    /// Return whether the address space has no claims or reservations.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -314,7 +314,7 @@ impl<A: Eq + Hash, E> AddressSpace<A, E> {
     /// smaller allocation where the implementation can do so). This may
     /// block concurrent address-space operations while it runs.
     ///
-    /// Preserves every live registration, endpoint, and generation. Safe
+    /// Preserves every claim, reservation, endpoint, and generation. Safe
     /// on a new or already-empty space; idempotent; may be called while
     /// registrations are live. Ordinary `Lease::release` never shrinks
     /// automatically.
@@ -330,7 +330,7 @@ where
     /// Exclusively claim `address` for `endpoint`.
     ///
     /// # Errors
-    /// Returns [`AddressInUse`] when an owner is already registered.
+    /// Returns [`AddressInUse`] when the address is already claimed or reserved.
     ///
     /// # Panics
     /// Panics after this address space has issued all `u64::MAX` registration
@@ -363,10 +363,32 @@ where
     /// been issued. Exhaustion is permanent.
     ///
     /// # Errors
-    /// Returns [`ClaimError::AddressInUse`] when an owner is already
-    /// registered. Returns [`ClaimError::RegistrationIdsExhausted`] after the
-    /// address space has issued all `u64::MAX` registration identities.
+    /// Returns [`ClaimError::AddressInUse`] when the address is already
+    /// claimed or reserved. Returns [`ClaimError::RegistrationIdsExhausted`]
+    /// after the address space has issued all `u64::MAX` identities.
     pub fn try_claim(&self, address: A, endpoint: E) -> Result<Lease<A, E>, ClaimError<A>> {
+        self.acquire(address, Some(endpoint))
+    }
+
+    /// Reserve `address` exclusively without publishing an endpoint.
+    ///
+    /// The reservation blocks both claims and reservations at this address,
+    /// counts toward [`Self::len`], and remains absent from [`Self::resolve`].
+    /// Dropping it frees the address; [`Reservation::publish`] consumes it and
+    /// returns a lease for the same registration identity.
+    ///
+    /// The key is cloned before taking the table lock, with the same key
+    /// contracts as [`Self::claim`]. Errors return the original address.
+    ///
+    /// # Errors
+    /// Returns [`ClaimError::AddressInUse`] if the address is occupied (even
+    /// after identity exhaustion), or [`ClaimError::RegistrationIdsExhausted`]
+    /// if it is free but all `u64::MAX` identities have been issued.
+    pub fn try_reserve(&self, address: A) -> Result<Reservation<A, E>, ClaimError<A>> {
+        self.acquire(address, None).map(Reservation)
+    }
+
+    fn acquire(&self, address: A, endpoint: Option<E>) -> Result<Lease<A, E>, ClaimError<A>> {
         // The key copy for the table happens before the write guard is
         // taken: caller `A: Clone` code must not run under the lock.
         let key = address.clone();
@@ -377,7 +399,7 @@ where
         let Some(generation) = entries.take_generation() else {
             return Err(ClaimError::RegistrationIdsExhausted(address));
         };
-        entries.insert(key, generation.get(), endpoint);
+        entries.insert(key, generation.get(), endpoint.map(Arc::new));
         Ok(Lease {
             inner: self.inner.clone(),
             address,
@@ -393,7 +415,7 @@ where
     E: Clone,
 {
     /// Resolve an opaque snapshot of the endpoint currently registered at
-    /// `address`.
+    /// `address`. Returns `None` for an unpublished reservation.
     ///
     /// The returned handle is an exact snapshot of the resolved registration:
     /// it remains valid after the lease is released or the address is reused.
@@ -404,9 +426,78 @@ where
     #[must_use]
     pub fn resolve(&self, address: &A) -> Option<Resolved<E>> {
         let guard = self.inner.read_entries();
-        let endpoint = guard.get(address).map(|entry| Arc::clone(&entry.endpoint));
+        let endpoint = guard.get(address).and_then(|entry| entry.endpoint.clone());
         drop(guard);
         endpoint.as_deref().cloned().map(Resolved)
+    }
+}
+
+/// Exclusive, unpublished ownership of one address registration generation.
+///
+/// A reservation is affine: it cannot be cloned, and publication consumes it.
+/// Dropping it releases exactly its generation. It keeps the address space
+/// alive even if all [`AddressSpace`] handles are dropped.
+///
+/// ```
+/// use bombay_address::AddressSpace;
+/// let space = AddressSpace::new();
+/// let reserved = space.try_reserve("worker").unwrap();
+/// let identity = reserved.registration_id();
+/// assert!(space.resolve(&"worker").is_none());
+/// let lease = reserved.publish("ready");
+/// assert_eq!(lease.registration_id(), identity);
+/// assert_eq!(space.resolve(&"worker").as_deref(), Some(&"ready"));
+/// drop(lease);
+/// assert!(space.is_empty());
+/// ```
+///
+/// ```compile_fail
+/// use bombay_address::AddressSpace;
+/// let space = AddressSpace::<_, ()>::new();
+/// let reserved = space.try_reserve(1).unwrap();
+/// let duplicate = reserved.clone();
+/// ```
+///
+/// ```compile_fail
+/// use bombay_address::AddressSpace;
+/// let space = AddressSpace::new();
+/// let reserved = space.try_reserve(1).unwrap();
+/// let first = reserved.publish(10);
+/// let second = reserved.publish(20);
+/// ```
+#[must_use = "dropping the reservation immediately releases the address"]
+pub struct Reservation<A: Eq + Hash, E>(Lease<A, E>);
+
+impl<A: Eq + Hash, E> Reservation<A, E> {
+    /// Inspect the reserved address.
+    #[must_use]
+    pub fn address(&self) -> &A {
+        self.0.address()
+    }
+
+    /// Return the identity that publication will preserve.
+    ///
+    /// This value grants no ownership or release authority.
+    #[must_use]
+    pub fn registration_id(&self) -> RegistrationId {
+        self.0.registration_id()
+    }
+
+    /// Publish `endpoint` and transfer ownership to a lease of this generation.
+    ///
+    /// Publication is atomic with respect to resolution. It performs no second
+    /// collision check and allocates no registration identity. It therefore
+    /// succeeds even when the address space's identities are exhausted.
+    /// The address is neither cloned nor reinserted; its `Hash` and `Eq` must
+    /// obey the [key contracts](index.html#address-key-contracts).
+    #[must_use = "dropping the lease immediately releases the published endpoint"]
+    pub fn publish(self, endpoint: E) -> Lease<A, E> {
+        let endpoint = Arc::new(endpoint);
+        self.0
+            .inner
+            .write_entries()
+            .publish(&self.0.address, endpoint);
+        self.0
     }
 }
 
@@ -587,6 +678,83 @@ mod tests {
         assert_eq!(snapshot.as_str(), "first");
         assert_eq!(space.resolve(&7).unwrap().as_str(), "second");
         drop(second);
+    }
+
+    #[test]
+    fn reservations_publish_after_exhaustion_without_allocating_an_identity() {
+        let space = AddressSpace::new();
+        space
+            .inner
+            .write_entries()
+            .set_next_generation(u64::MAX - 1);
+        let first = space.try_reserve(String::from("first")).unwrap();
+        let last = space.try_reserve(String::from("last")).unwrap();
+        let identity = last.registration_id();
+        assert!(matches!(
+            space.try_reserve(String::from("last")),
+            Err(ClaimError::AddressInUse(_))
+        ));
+        assert!(matches!(
+            space.try_claim(String::from("last"), 1),
+            Err(ClaimError::AddressInUse(_))
+        ));
+        let address = String::from("exhausted");
+        let pointer = address.as_ptr();
+        let Err(ClaimError::RegistrationIdsExhausted(returned)) = space.try_reserve(address) else {
+            panic!("identities exhausted");
+        };
+        assert_eq!(returned.as_ptr(), pointer);
+        drop(first);
+        let last = last.publish(99);
+        assert_eq!(last.registration_id(), identity);
+        assert_eq!(space.resolve(last.address()).as_deref(), Some(&99));
+        last.release();
+        assert!(matches!(
+            space.try_reserve(String::from("last")),
+            Err(ClaimError::RegistrationIdsExhausted(_))
+        ));
+        assert!(space.is_empty());
+    }
+
+    #[test]
+    fn stale_reservation_and_lease_drops_preserve_later_generations() {
+        // Public affine ownership cannot create a stale owner. Retire entries
+        // internally to exercise the defensive generation gate itself.
+        let space = AddressSpace::new();
+        let stale = space.try_reserve(1).unwrap();
+        drop(
+            space
+                .inner
+                .write_entries()
+                .remove_if(&1, stale.0.generation.get()),
+        );
+        let current = space.try_reserve(1).unwrap();
+        drop(stale);
+        assert_eq!(space.len(), 1);
+        let stale = current.publish(10);
+        drop(
+            space
+                .inner
+                .write_entries()
+                .remove_if(&1, stale.generation.get()),
+        );
+        let current = space.try_reserve(1).unwrap().publish(20);
+        drop(stale);
+        assert_eq!(space.resolve(&1).as_deref(), Some(&20));
+        drop(current);
+        assert!(space.is_empty());
+    }
+
+    #[test]
+    fn failed_acquisitions_and_publication_do_not_consume_generations() {
+        let space = AddressSpace::new();
+        let first = space.try_reserve(1).unwrap();
+        assert!(space.try_reserve(1).is_err());
+        assert!(space.try_claim(1, ()).is_err());
+        let first = first.publish(());
+        let second = space.try_reserve(2).unwrap();
+        assert_eq!(first.generation.get(), 1);
+        assert_eq!(second.0.generation.get(), 2);
     }
 
     #[test]

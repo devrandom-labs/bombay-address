@@ -5,7 +5,7 @@ description: Claim, resolve, release, and reclaim address-space storage.
 
 # Using leases
 
-`claim(address, endpoint)` succeeds only when no live registration owns that
+`claim(address, endpoint)` succeeds only when no claim or reservation owns that
 address. `resolve(&address)` clones a typed endpoint snapshot. Consume the lease
 with `release()`, or simply drop it, to remove that exact generation.
 
@@ -22,3 +22,21 @@ a different identity.
 
 After a large churn burst, call `shrink_to_fit()` at an application-chosen quiet
 point to reclaim excess table capacity without changing live registrations.
+
+## Reservations
+
+`try_reserve(address)` returns a non-cloneable `Reservation` or a `ClaimError`
+containing the original address. While reserved, the address rejects claims and
+other reservations, but `resolve` returns `None`. Reservations count toward
+`len()` and make `is_empty()` false.
+
+Keep the reservation while constructing the endpoint. `reservation.publish(endpoint)`
+consumes it and returns a `Lease` with the same `registration_id()`. Publication
+uses the existing table entry without repeating the collision check, cloning
+the address, or issuing another identity. Dropping an unpublished reservation
+releases its generation, including during unwinding from endpoint construction.
+
+`try_claim` and `try_reserve` return `ClaimError::RegistrationIdsExhausted` for
+free addresses after all identities have been issued. An occupied address
+still returns `AddressInUse`, and previously acquired reservations can still
+be published. `shrink_to_fit()` preserves reservations as well as leases.

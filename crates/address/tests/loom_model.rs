@@ -87,3 +87,107 @@ fn replacement_never_exposes_stale_or_torn_endpoint() {
         assert_eq!(space.resolve(&1), None);
     });
 }
+
+#[test]
+fn concurrent_reservations_admit_exactly_one_owner() {
+    loom::model(|| {
+        let space = AddressSpace::<u64, u64>::new();
+        let peer = space.clone();
+        let first = thread::spawn(move || peer.try_reserve(1));
+        let second = space.try_reserve(1);
+        let first = first.join().unwrap();
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        assert!(space.resolve(&1).is_none());
+        assert_eq!(space.len(), 1);
+        drop((first, second));
+        assert!(space.is_empty());
+    });
+}
+
+#[test]
+fn reservation_racing_claim_has_one_owner() {
+    loom::model(|| {
+        let space = AddressSpace::new();
+        let peer = space.clone();
+        let reserved = thread::spawn(move || peer.try_reserve(1));
+        let claimed = space.try_claim(1, 99);
+        let reserved = reserved.join().unwrap();
+        assert_eq!(
+            usize::from(reserved.is_ok()) + usize::from(claimed.is_ok()),
+            1
+        );
+        assert_eq!(
+            space.resolve(&1).as_deref().copied(),
+            claimed.as_ref().ok().map(|_| 99)
+        );
+    });
+}
+
+#[test]
+fn publish_racing_resolve_and_claim_is_atomic() {
+    loom::model(|| {
+        let space = AddressSpace::new();
+        let reserved = space.try_reserve(1).unwrap();
+        let identity = reserved.registration_id();
+        let peer = space.clone();
+        let publisher = thread::spawn(move || reserved.publish((17, 29)));
+        let contender = thread::spawn(move || {
+            assert!(peer.try_claim(1, (0, 0)).is_err());
+            assert!(peer.try_reserve(1).is_err());
+        });
+        if let Some(snapshot) = space.resolve(&1) {
+            assert_eq!(*snapshot, (17, 29));
+        }
+        let lease = publisher.join().unwrap();
+        contender.join().unwrap();
+        assert_eq!(lease.registration_id(), identity);
+        assert_eq!(space.resolve(&1).as_deref(), Some(&(17, 29)));
+        drop(lease);
+    });
+}
+
+#[test]
+fn reservation_drop_racing_reacquisition_and_resolve_is_generation_safe() {
+    loom::model(|| {
+        let space = AddressSpace::new();
+        let reserved = space.try_reserve(1).unwrap();
+        let old_id = reserved.registration_id();
+        let peer = space.clone();
+        let releaser = thread::spawn(move || drop(reserved));
+        let acquirer = thread::spawn(move || peer.try_reserve(1).map(|r| r.publish(99)));
+        if let Some(snapshot) = space.resolve(&1) {
+            assert_eq!(*snapshot, 99);
+        }
+        releaser.join().unwrap();
+        let replacement = acquirer.join().unwrap();
+        if let Ok(lease) = replacement {
+            assert_ne!(lease.registration_id(), old_id);
+            assert_eq!(space.resolve(&1).as_deref(), Some(&99));
+            drop(lease);
+        }
+        assert!(space.is_empty());
+    });
+}
+
+#[test]
+fn publish_release_and_replacement_preserve_snapshots() {
+    loom::model(|| {
+        let space = AddressSpace::new();
+        let reserved = space.try_reserve(1).unwrap();
+        let peer = space.clone();
+        let writer = thread::spawn(move || {
+            reserved.publish((1, 1)).release();
+            peer.try_reserve(1).unwrap().publish((2, 2))
+        });
+        let snapshot = space.resolve(&1);
+        if let Some(value) = &snapshot {
+            assert!(**value == (1, 1) || **value == (2, 2));
+        }
+        let lease = writer.join().unwrap();
+        assert_eq!(space.resolve(&1).as_deref(), Some(&(2, 2)));
+        drop(lease);
+        if let Some(value) = snapshot {
+            assert!(*value == (1, 1) || *value == (2, 2));
+        }
+    });
+}
