@@ -13,7 +13,7 @@ homepage = "https://github.com/devrandom-labs/bombay-address"
 bombay-address = { path = "crates/address" }
 criterion = "0.8"
 loom = "0.7"
-parking_lot = "0.12"
+parking_lot = "0.13"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
